@@ -946,7 +946,6 @@ WARN_LOGFILE           =
 INPUT                  = ../../bsp \
                          ../../crypto \
                          ../../drv \
-                         ../../otap \
                          ../../projects
 
 # This tag can be used to specify the character encoding of the source files
