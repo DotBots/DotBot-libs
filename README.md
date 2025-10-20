@@ -1,7 +1,7 @@
 # DotBot Libraries: reusable peripheral drivers and libraries
 
 [![CI][ci-badge]][ci-link]
-[![Documentation][doc-badge]][doc-link]
+<!-- [![Documentation][doc-badge]][doc-link] -->
 [![License][license-badge]][license-link]
 
 ## Overview
@@ -34,7 +34,7 @@ For details on SEGGER Embedded Studio, read the
 
 [ci-badge]: https://github.com/DotBots/DotBot-libs/workflows/CI/badge.svg
 [ci-link]: https://github.com/DotBots/DotBot-libs/actions?query=workflow%3ACI+branch%3Amain
-[doc-badge]: https://readthedocs.org/projects/dotbot-libs/badge/?version=latest
-[doc-link]: https://dotbot-libs.readthedocs.io/en/latest
+<!-- [doc-badge]: https://readthedocs.org/projects/dotbot-libs/badge/?version=latest
+[doc-link]: https://dotbot-libs.readthedocs.io/en/latest -->
 [license-badge]: https://img.shields.io/github/license/DotBots/DotBot-libs
 [license-link]: https://github.com/DotBots/dotbot-libs/blob/main/LICENSE.txt
