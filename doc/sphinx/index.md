@@ -3,7 +3,6 @@
 
 examples
 nrf5340
-upgate
 api
 ```
 

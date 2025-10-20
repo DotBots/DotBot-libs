@@ -86,7 +86,7 @@ ifneq (,$(filter nrf5340dk-net,$(BUILD_TARGET)))
   ARTIFACT_PROJECTS := 03app_nrf5340_net
 endif
 
-DIRS ?= bsp crypto drv projects upgate
+DIRS ?= bsp crypto drv projects
 SRCS ?= $(foreach dir,$(DIRS),$(shell find $(dir) -name "*.[c|h]"))
 CLANG_FORMAT ?= clang-format
 CLANG_FORMAT_TYPE ?= file
