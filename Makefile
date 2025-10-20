@@ -59,7 +59,6 @@ else ifeq (nrf5340dk-net,$(BUILD_TARGET))
     01drv_motors \
     01drv_pid \
     01drv_rgbled \
-    03app_nrf5340_net \
     #
   # Bootloader not supported on nrf5340 network core
   BOOTLOADER :=
