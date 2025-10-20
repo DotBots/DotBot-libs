@@ -69,7 +69,6 @@
   <import file_name="bsp/bsp.emProject" />
   <import file_name="crypto/crypto.emProject" />
   <import file_name="drv/drv.emProject" />
-  <import file_name="otap/otap.emProject" />
   <import file_name="projects/projects-bsp-drv.emProject" />
   <import file_name="projects/projects-crypto.emProject" />
   <import file_name="upgate/upgate.emProject" />

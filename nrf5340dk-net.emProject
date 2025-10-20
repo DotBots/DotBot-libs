@@ -69,5 +69,4 @@
   <import file_name="drv/drv.emProject" />
   <import file_name="projects/projects-bsp-drv.emProject" />
   <import file_name="projects/projects-nrf5340-net.emProject" />
-  <import file_name="otap/otap.emProject" />
 </solution>

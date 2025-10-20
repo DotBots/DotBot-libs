@@ -106,21 +106,11 @@ ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 .PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format
 
-all: $(PROJECTS) $(OTAP_APPS) $(BOOTLOADER)
+all: $(PROJECTS)
 
 $(PROJECTS):
 	@echo "\e[1mBuilding project $@\e[0m"
 	"$(SEGGER_DIR)/bin/emBuild" $(PROJECT_FILE) -project $@ -config $(BUILD_CONFIG) $(PACKAGES_DIR_OPT) -rebuild $(VERBOSE_OPTS)
-	@echo "\e[1mDone\e[0m\n"
-
-$(OTAP_APPS):
-	@echo "\e[1mBuilding otap application $@\e[0m"
-	"$(SEGGER_DIR)/bin/emBuild" $(PROJECT_FILE) -project $@ -config $(BUILD_CONFIG) $(PACKAGES_DIR_OPT) -rebuild $(VERBOSE_OPTS)
-	@echo "\e[1mDone\e[0m\n"
-
-$(BOOTLOADER):
-	@echo "\e[1mBuilding bootloader application $@\e[0m"
-	"$(SEGGER_DIR)/bin/emBuild" otap/$(BUILD_TARGET)-bootloader.emProject -project $@ -config Release -rebuild $(PACKAGES_DIR_OPT) $(VERBOSE_OPTS)
 	@echo "\e[1mDone\e[0m\n"
 
 list-projects:
