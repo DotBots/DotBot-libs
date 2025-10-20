@@ -7,7 +7,6 @@ SEGGER_DIR ?= /opt/segger
 BUILD_CONFIG ?= Debug
 BUILD_TARGET ?= nrf52840dk
 PROJECT_FILE ?= $(BUILD_TARGET).emProject
-BOOTLOADER ?= bootloader
 QUIET ?= 0
 VERBOSE_OPTS ?= -verbose -echo
 ifeq ($(QUIET),1)
@@ -60,8 +59,6 @@ else ifeq (nrf5340dk-net,$(BUILD_TARGET))
     01drv_pid \
     01drv_rgbled \
     #
-  # Bootloader not supported on nrf5340 network core
-  BOOTLOADER :=
 else
   PROJECTS ?= $(shell find projects/ -maxdepth 1 -mindepth 1 -type d | tr -d "/" | sed -e s/projects// | sort)
 endif
@@ -73,8 +70,6 @@ endif
 
 ifneq (,$(filter nrf52833dk,$(BUILD_TARGET)))
   PROJECTS := $(filter-out 01crypto_% 01bsp_qspi,$(PROJECTS))
-  # Bootloader not supported on nrf52833dk
-  BOOTLOADER :=
 endif
 
 # remove incompatible apps (nrf5340) for nrf52833dk/nrf52840dk build
@@ -91,10 +86,7 @@ ifneq (,$(filter nrf5340dk-net,$(BUILD_TARGET)))
   ARTIFACT_PROJECTS := 03app_nrf5340_net
 endif
 
-OTAP_APPS ?= $(shell find otap/ -maxdepth 1 -mindepth 1 -type d | tr -d "/" | sed -e s/otap// | sort)
-OTAP_APPS := $(filter-out bootloader,$(OTAP_APPS))
-
-DIRS ?= bsp crypto drv projects otap upgate
+DIRS ?= bsp crypto drv projects upgate
 SRCS ?= $(foreach dir,$(DIRS),$(shell find $(dir) -name "*.[c|h]"))
 CLANG_FORMAT ?= clang-format
 CLANG_FORMAT_TYPE ?= file

@@ -21,7 +21,6 @@ _api/drv_lz4
 _api/drv_motors
 _api/drv_move
 _api/drv_n25q128
-_api/drv_ota
 _api/drv_pid
 _api/drv_protocol
 _api/drv_rgbled
