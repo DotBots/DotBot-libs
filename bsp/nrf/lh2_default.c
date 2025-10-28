@@ -843,9 +843,10 @@ void db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
     for (uint8_t sweep = 0; sweep < LH2_SWEEP_COUNT; sweep++) {
         for (uint8_t basestation = 0; basestation < LH2_BASESTATION_COUNT; basestation++) {
-            lh2->locations[sweep][basestation].lfsr_counts = LH2_LOCATION_ERROR_INDICATOR;
-            lh2->timestamps[sweep][basestation]            = 0;
-            lh2->data_ready[sweep][basestation]            = DB_LH2_NO_NEW_DATA;
+            lh2->locations[sweep][basestation].lfsr_counts         = LH2_LOCATION_ERROR_INDICATOR;
+            lh2->locations[sweep][basestation].selected_polynomial = LH2_POLYNOMIAL_ERROR_INDICATOR;
+            lh2->timestamps[sweep][basestation]                    = 0;
+            lh2->data_ready[sweep][basestation]                    = DB_LH2_NO_NEW_DATA;
         }
     }
     memset(_lh2_vars.data.buffer[0], 0, LH2_BUFFER_SIZE);
@@ -993,7 +994,8 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     // Save raw data information
     lh2->timestamps[sweep][basestation] = temp_timestamp;
     // Save processed location information
-    lh2->locations[sweep][basestation].lfsr_counts = lfsr_loc_temp;
+    lh2->locations[sweep][basestation].lfsr_counts         = lfsr_loc_temp;
+    lh2->locations[sweep][basestation].selected_polynomial = temp_selected_polynomial;
     // Mark the data point as processed
     lh2->data_ready[sweep][basestation] = DB_LH2_PROCESSED_DATA_AVAILABLE;
 }

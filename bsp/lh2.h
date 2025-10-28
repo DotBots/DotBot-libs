@@ -39,7 +39,8 @@ typedef enum {
 
 /// LH2 raw data location
 typedef struct __attribute__((packed)) {
-    uint32_t lfsr_counts;  ///< LFSR counts is the shift position in a given polynomial's LFSR that the decoded data is, initialize to error state
+    uint32_t lfsr_counts;          ///< LFSR counts is the shift position in a given polynomial's LFSR that the decoded data is, initialize to error state
+    uint32_t selected_polynomial;  ///< selected poly is the polyomial # (between 0 and 31) that the demodulation code thinks the demodulated bits are a part of, initialize to error state
 } db_lh2_location_t;
 
 /// Pair of sweep counts for one basestation
