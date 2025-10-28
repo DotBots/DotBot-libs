@@ -37,22 +37,18 @@ typedef enum {
     DB_LH2_PROCESSED_DATA_AVAILABLE,  ///< The data occupying this spot of the buffer is new and ready to send.
 } db_lh2_data_ready_state_t;
 
-/// LH2 raw data
-typedef struct __attribute__((packed)) {
-    uint64_t bits_sweep;           ///< bits sweep is the result of the demodulation, sweep_N indicates which SPI transfer those bits are associated with
-    uint8_t  selected_polynomial;  ///< selected poly is the polyomial # (between 0 and 31) that the demodulation code thinks the demodulated bits are a part of, initialize to error state
-    int8_t   bit_offset;           ///< bit_offset indicates an offset between the start of the packet, as indicated by envelope dropping, and the 17-bit sequence that is verified to be in a known LFSR sequence
-} db_lh2_raw_data_t;
-
 /// LH2 raw data location
 typedef struct __attribute__((packed)) {
-    uint32_t lfsr_location;        ///< LFSR location is the position in a given polynomial's LFSR that the decoded data is, initialize to error state
-    uint8_t  selected_polynomial;  ///< selected poly is the polyomial # (between 0 and 31) that the demodulation code thinks the demodulated bits are a part of, initialize to error state
+    uint32_t lfsr_counts;  ///< LFSR counts is the shift position in a given polynomial's LFSR that the decoded data is, initialize to error state
 } db_lh2_location_t;
+
+/// Pair of sweep counts for one basestation
+typedef struct __attribute__((packed)) {
+    uint32_t counts[LH2_SWEEP_COUNT];  ///< count is the number of times each basestation has sent a sweep
+} db_lh2_sweep_counts_t;
 
 /// LH2 instance (one row per laser sweep, and one column per basestation)
 typedef struct {
-    db_lh2_raw_data_t         raw_data[LH2_SWEEP_COUNT][LH2_BASESTATION_COUNT];    ///< raw data decoded from the lighthouse
     db_lh2_location_t         locations[LH2_SWEEP_COUNT][LH2_BASESTATION_COUNT];   ///< buffer holding the computed locations
     uint32_t                  timestamps[LH2_SWEEP_COUNT][LH2_BASESTATION_COUNT];  ///< timestamp of when the raw data was received
     db_lh2_data_ready_state_t data_ready[LH2_SWEEP_COUNT][LH2_BASESTATION_COUNT];  ///< Is the data in the buffer ready to send over radio, or has it already been sent ?

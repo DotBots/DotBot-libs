@@ -843,13 +843,9 @@ void db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
     for (uint8_t sweep = 0; sweep < LH2_SWEEP_COUNT; sweep++) {
         for (uint8_t basestation = 0; basestation < LH2_BASESTATION_COUNT; basestation++) {
-            lh2->raw_data[sweep][basestation].bits_sweep           = 0;
-            lh2->raw_data[sweep][basestation].selected_polynomial  = LH2_POLYNOMIAL_ERROR_INDICATOR;
-            lh2->raw_data[sweep][basestation].bit_offset           = 0;
-            lh2->locations[sweep][basestation].selected_polynomial = LH2_POLYNOMIAL_ERROR_INDICATOR;
-            lh2->locations[sweep][basestation].lfsr_location       = LH2_LOCATION_ERROR_INDICATOR;
-            lh2->timestamps[sweep][basestation]                    = 0;
-            lh2->data_ready[sweep][basestation]                    = DB_LH2_NO_NEW_DATA;
+            lh2->locations[sweep][basestation].lfsr_counts = LH2_LOCATION_ERROR_INDICATOR;
+            lh2->timestamps[sweep][basestation]            = 0;
+            lh2->data_ready[sweep][basestation]            = DB_LH2_NO_NEW_DATA;
         }
     }
     memset(_lh2_vars.data.buffer[0], 0, LH2_BUFFER_SIZE);
@@ -929,11 +925,8 @@ void db_lh2_process_raw_data(db_lh2_t *lh2) {
 
     // Put the newly read polynomials in the data structure (polynomial 0,1 must map to LH0, 2,3 to LH1. This can be accomplish by  integer-dividing the selected poly in 2, a shift >> accomplishes this.)
     // This structur always holds the two most recent sweeps from any lighthouse
-    lh2->raw_data[sweep][temp_selected_polynomial >> 1].bit_offset          = temp_bit_offset;
-    lh2->raw_data[sweep][temp_selected_polynomial >> 1].selected_polynomial = temp_selected_polynomial;
-    lh2->raw_data[sweep][temp_selected_polynomial >> 1].bits_sweep          = temp_bits_sweep;
-    lh2->timestamps[sweep][temp_selected_polynomial >> 1]                   = temp_timestamp;
-    lh2->data_ready[sweep][temp_selected_polynomial >> 1]                   = DB_LH2_RAW_DATA_AVAILABLE;
+    lh2->timestamps[sweep][temp_selected_polynomial >> 1] = temp_timestamp;
+    lh2->data_ready[sweep][temp_selected_polynomial >> 1] = DB_LH2_RAW_DATA_AVAILABLE;
 }
 
 void db_lh2_process_location(db_lh2_t *lh2) {
@@ -998,13 +991,9 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     //*********************************************************************************//
 
     // Save raw data information
-    lh2->raw_data[sweep][basestation].bit_offset          = temp_bit_offset;
-    lh2->raw_data[sweep][basestation].selected_polynomial = temp_selected_polynomial;
-    lh2->raw_data[sweep][basestation].bits_sweep          = temp_bits_sweep;
-    lh2->timestamps[sweep][basestation]                   = temp_timestamp;
+    lh2->timestamps[sweep][basestation] = temp_timestamp;
     // Save processed location information
-    lh2->locations[sweep][basestation].lfsr_location       = lfsr_loc_temp;
-    lh2->locations[sweep][basestation].selected_polynomial = temp_selected_polynomial;
+    lh2->locations[sweep][basestation].lfsr_counts = lfsr_loc_temp;
     // Mark the data point as processed
     lh2->data_ready[sweep][basestation] = DB_LH2_PROCESSED_DATA_AVAILABLE;
 }
@@ -1791,11 +1780,8 @@ uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp) {
     for (size_t sweep = 0; sweep < 2; sweep++) {
         if (now - lh2->timestamps[0][basestation] > LH2_MAX_DATA_VALID_TIME_US) {
             // Remove data that is too old.
-            lh2->raw_data[sweep][basestation].bits_sweep          = 0;
-            lh2->raw_data[sweep][basestation].selected_polynomial = LH2_POLYNOMIAL_ERROR_INDICATOR;
-            lh2->raw_data[sweep][basestation].bit_offset          = 0;
-            lh2->timestamps[sweep][basestation]                   = 0;
-            lh2->data_ready[sweep][basestation]                   = DB_LH2_NO_NEW_DATA;
+            lh2->timestamps[sweep][basestation] = 0;
+            lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
             // I don't think it's worth it to remove the location data. It is already marked as "No new data"
         }
     }
