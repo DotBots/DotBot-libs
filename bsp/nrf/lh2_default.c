@@ -884,52 +884,6 @@ void db_lh2_reset(db_lh2_t *lh2) {
     }
 }
 
-void db_lh2_process_raw_data(db_lh2_t *lh2) {
-    if (_lh2_vars.data.count == 0) {
-        return;
-    }
-
-    // Get value before it's overwritten by the ringbuffer.
-    uint8_t temp_spi_bits[SPI_BUFFER_SIZE * 2] = { 0 };  // The temp buffer has to be 128 long because _demodulate_light() expects it to be so
-                                                         // Making it smaller causes a hardfault
-                                                         // I don't know why, the SPI buffer is clearly 64bytes long.
-                                                         // should ask fil about this
-
-    // stop the interruptions while you're reading the data.
-    uint32_t temp_timestamp = 0;  // default timestamp
-    if (!_get_from_spi_ring_buffer(&_lh2_vars.data, temp_spi_bits, &temp_timestamp)) {
-        return;
-    }
-
-// Check if Qualysis Mocap data is interfering with the SPI capture
-#if defined(LH2_MOCAP_FILTER)
-    if (_check_mocap_interference(temp_spi_bits)) {
-        return;  // if a qualysis pulse caused a false spi trigger, leave the function.
-    }
-#endif
-
-    // perform the demodulation + poly search on the received packets
-    // convert the SPI reading to bits via zero-crossing counter demodulation and differential/biphasic manchester decoding
-    uint64_t temp_bits_sweep = _demodulate_light(temp_spi_bits);
-
-    // figure out which polynomial each one of the two samples come from.
-    int8_t  temp_bit_offset          = 0;  // default offset
-    uint8_t temp_selected_polynomial = _determine_polynomial(temp_bits_sweep, &temp_bit_offset);
-
-    // If there was an error with the polynomial, leave without updating anything
-    if (temp_selected_polynomial == LH2_POLYNOMIAL_ERROR_INDICATOR) {
-        return;
-    }
-
-    // Figure in which of the two sweep slots we should save the new data.
-    uint8_t sweep = _select_sweep(lh2, temp_selected_polynomial, temp_timestamp);
-
-    // Put the newly read polynomials in the data structure (polynomial 0,1 must map to LH0, 2,3 to LH1. This can be accomplish by  integer-dividing the selected poly in 2, a shift >> accomplishes this.)
-    // This structur always holds the two most recent sweeps from any lighthouse
-    lh2->timestamps[sweep][temp_selected_polynomial >> 1] = temp_timestamp;
-    lh2->data_ready[sweep][temp_selected_polynomial >> 1] = DB_LH2_RAW_DATA_AVAILABLE;
-}
-
 void db_lh2_process_location(db_lh2_t *lh2) {
     if (_lh2_vars.data.count == 0) {
         return;
@@ -950,6 +904,14 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     if (!_get_from_spi_ring_buffer(&_lh2_vars.data, temp_spi_bits, &temp_timestamp)) {
         return;
     }
+
+    // Check if Qualysis Mocap data is interfering with the SPI capture
+#if defined(LH2_MOCAP_FILTER)
+    if (_check_mocap_interference(temp_spi_bits)) {
+        return;  // if a qualysis pulse caused a false spi trigger, leave the function.
+    }
+#endif
+
     // perform the demodulation + poly search on the received packets
     // convert the SPI reading to bits via zero-crossing counter demodulation and differential/biphasic manchester decoding
     uint64_t temp_bits_sweep = _demodulate_light(temp_spi_bits);
@@ -981,8 +943,8 @@ void db_lh2_process_location(db_lh2_t *lh2) {
         return;
     }
 
-    // Compute and save the lsfr location.
-    uint32_t lfsr_loc_temp = _reverse_count_p(
+    // Compute and save the lsfr count.
+    uint32_t temp_lfsr_counts = _reverse_count_p(
                                  temp_selected_polynomial,
                                  temp_bits_sweep >> (47 - temp_bit_offset)) -
                              temp_bit_offset;
@@ -994,7 +956,7 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     // Save raw data information
     lh2->timestamps[sweep][basestation] = temp_timestamp;
     // Save processed location information
-    lh2->locations[sweep][basestation].lfsr_counts         = lfsr_loc_temp;
+    lh2->locations[sweep][basestation].lfsr_counts         = temp_lfsr_counts;
     lh2->locations[sweep][basestation].selected_polynomial = temp_selected_polynomial;
     // Mark the data point as processed
     lh2->data_ready[sweep][basestation] = DB_LH2_PROCESSED_DATA_AVAILABLE;
