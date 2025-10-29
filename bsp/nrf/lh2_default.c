@@ -945,9 +945,9 @@ void db_lh2_process_location(db_lh2_t *lh2) {
 
     // Compute and save the lsfr count.
     uint32_t temp_lfsr_counts = _reverse_count_p(
-                                 temp_selected_polynomial,
-                                 temp_bits_sweep >> (47 - temp_bit_offset)) -
-                             temp_bit_offset;
+                                    temp_selected_polynomial,
+                                    temp_bits_sweep >> (47 - temp_bit_offset)) -
+                                temp_bit_offset;
 
     //*********************************************************************************//
     //                                 Store results                                   //
