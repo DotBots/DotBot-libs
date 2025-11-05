@@ -2,6 +2,7 @@
 *.emSession
 *.jlink
 *.ind
+packages/
 
 # Mac OS files
 .DS_Store
