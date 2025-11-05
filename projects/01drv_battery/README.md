@@ -1,0 +1,1 @@
+# Reads the battery level
