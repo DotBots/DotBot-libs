@@ -10,6 +10,7 @@ Libraries
 :caption: Contents
 
 _api/drv_as5048b
+_api/drv_battery
 _api/drv_hdlc
 _api/drv_imu
 _api/drv_ism330
