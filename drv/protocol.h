@@ -26,20 +26,20 @@
 
 /// Command type
 typedef enum {
-    DB_PROTOCOL_CMD_MOVE_RAW       = 0,   ///< Move raw command type
-    DB_PROTOCOL_CMD_RGB_LED        = 1,   ///< RGB LED command type
-    DB_PROTOCOL_LH2_RAW_DATA       = 2,   ///< Lighthouse 2 raw data
-    DB_PROTOCOL_LH2_LOCATION       = 3,   ///< Lighthouse processed locations
-    DB_PROTOCOL_ADVERTISEMENT      = 4,   ///< DotBot advertisements
-    DB_PROTOCOL_GPS_LOCATION       = 5,   ///< GPS data from SailBot
-    DB_PROTOCOL_DOTBOT_DATA        = 6,   ///< DotBot specific data (for now location and direction)
-    DB_PROTOCOL_CONTROL_MODE       = 7,   ///< Robot remote control mode (automatic or manual)
-    DB_PROTOCOL_LH2_WAYPOINTS      = 8,   ///< List of LH2 waypoints to follow
-    DB_PROTOCOL_GPS_WAYPOINTS      = 9,   ///< List of GPS waypoints to follow
-    DB_PROTOCOL_SAILBOT_DATA       = 10,  ///< SailBot specific data (for now GPS and direction)
-    DB_PROTOCOL_CMD_XGO_ACTION     = 11,  ///< XGO action command
-    DB_PROTOCOL_LH2_PROCESSED_DATA = 12,  ///< Lighthouse 2 data processed at the DotBot
-    DB_PROTOCOL_LH2_CALIBRATION    = 14,  ///< Lighthouse 2 homography matrix after calibration
+    DB_PROTOCOL_CMD_MOVE_RAW         = 0,   ///< Move raw command type
+    DB_PROTOCOL_CMD_RGB_LED          = 1,   ///< RGB LED command type
+    DB_PROTOCOL_LH2_RAW_DATA         = 2,   ///< Lighthouse 2 raw data
+    DB_PROTOCOL_LH2_LOCATION         = 3,   ///< Lighthouse processed locations
+    DB_PROTOCOL_ADVERTISEMENT        = 4,   ///< DotBot advertisements
+    DB_PROTOCOL_GPS_LOCATION         = 5,   ///< GPS data from SailBot
+    DB_PROTOCOL_DOTBOT_ADVERTISEMENT = 6,   ///< DotBot specific advertisement message
+    DB_PROTOCOL_CONTROL_MODE         = 7,   ///< Robot remote control mode (automatic or manual)
+    DB_PROTOCOL_LH2_WAYPOINTS        = 8,   ///< List of LH2 waypoints to follow
+    DB_PROTOCOL_GPS_WAYPOINTS        = 9,   ///< List of GPS waypoints to follow
+    DB_PROTOCOL_SAILBOT_DATA         = 10,  ///< SailBot specific data (for now GPS and direction)
+    DB_PROTOCOL_CMD_XGO_ACTION       = 11,  ///< XGO action command
+    DB_PROTOCOL_LH2_PROCESSED_DATA   = 12,  ///< Lighthouse 2 data processed at the DotBot
+    DB_PROTOCOL_LH2_CALIBRATION      = 14,  ///< Lighthouse 2 homography matrix after calibration
 } protocol_data_type_t;
 
 /// Protocol packet type
@@ -194,11 +194,21 @@ size_t db_protocol_tdma_sync_frame_to_buffer(uint8_t *buffer, uint64_t dst, prot
  * @param[out]  buffer      Bytes array to write to
  * @param[in]   dst         Destination address written in the header
  * @param[in]   application Type of application advertized
+ *
+ * @return                  Number of bytes written in the buffer
+ */
+size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, application_type_t application);
+
+/**
+ * @brief   Write an application advertizement packet in a buffer
+ *
+ * @param[out]  buffer      Bytes array to write to
+ * @param[in]   dst         Destination address written in the header
  * @param[in]   calibrated  Whether the device LH2 is calibrated (true) or not (false)
  *
  * @return                  Number of bytes written in the buffer
  */
-size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, application_type_t application, bool calibrated);
+size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, bool calibrated);
 
 /**
  * @brief   Write a move raw command in a buffer
