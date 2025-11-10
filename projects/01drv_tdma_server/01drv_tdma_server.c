@@ -70,7 +70,7 @@ int main(void) {
         printf("[*] Client 10 = {%x}\n", (uint16_t)(clients[10].client >> 48));
 
         // Send an advertisement message
-        db_protocol_advertizement_to_buffer(packet_tx, DB_BROADCAST_ADDRESS, DotBot, false);
+        db_protocol_advertizement_to_buffer(packet_tx, DB_BROADCAST_ADDRESS, DotBot);
         size_t length = sizeof(protocol_header_t);
         db_tdma_server_tx((uint8_t *)packet_tx, length);
 
