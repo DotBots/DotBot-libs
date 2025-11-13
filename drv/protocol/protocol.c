@@ -54,14 +54,14 @@ size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, applic
     size_t header_length                        = _protocol_header_to_buffer(buffer, dst, DB_PACKET_DATA);
     *(buffer + header_length)                   = DB_PROTOCOL_ADVERTISEMENT;
     *(buffer + header_length + sizeof(uint8_t)) = application;
-    return header_length + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint8_t);
+    return header_length + sizeof(uint8_t) + sizeof(uint8_t);
 }
 
 size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, bool calibrated) {
     size_t header_length                                          = _protocol_header_to_buffer(buffer, dst, DB_PACKET_DATA);
     *(buffer + header_length)                                     = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
-    *(buffer + header_length + sizeof(uint8_t) + sizeof(uint8_t)) = calibrated;
-    return header_length + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(uint8_t);
+    *(buffer + header_length + sizeof(uint8_t)) = calibrated;
+    return header_length + sizeof(uint8_t) + sizeof(uint8_t);
 }
 
 size_t db_protocol_cmd_move_raw_to_buffer(uint8_t *buffer, uint64_t dst, protocol_move_raw_command_t *command) {
