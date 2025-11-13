@@ -20,6 +20,7 @@
 #include "gpio.h"
 #include "lh2.h"
 #include "timer_hf.h"
+#include "board_config.h"
 
 //=========================== defines =========================================
 
@@ -679,8 +680,9 @@ static lh2_vars_t _lh2_vars;  ///< local data of the LH2 driver
  *
  * @param[in]   gpio_d  pointer to gpio data
  * @param[in]   gpio_e  pointer to gpio event
+ * @return bool
  */
-void _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e);
+bool _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e);
 
 /**
  * @brief
@@ -816,7 +818,7 @@ uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp);
 bool _check_mocap_interference(uint8_t *arr);
 //=========================== public ===========================================
 
-void db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
+bool db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
 #if defined(BOARD_DOTBOT_V3)
     // DotBot-v3 has its own LH enable pin
@@ -825,7 +827,10 @@ void db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
     db_gpio_set(&lh_en);
 #endif
     // Initialize the TS4231 on power-up - this is only necessary when power-cycling
-    _initialize_ts4231(gpio_d, gpio_e);
+    if (!_initialize_ts4231(gpio_d, gpio_e)) {
+        // TS4231 initialization failed
+        return false;
+    }
 
     // Configure the necessary Pins in the GPIO peripheral  (MOSI and CS not needed)
     _lh2_pin_set_input(gpio_d);                    // Data_pin will become the MISO pin
@@ -859,6 +864,8 @@ void db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
     // initialize PPI
     _ppi_setup();
+
+    return true;
 }
 
 void db_lh2_start(void) {
@@ -996,9 +1003,15 @@ void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, int32_t h
     lh2->lh2_calibration_complete = true;
 }
 
+#define TS4231_INIT_SAMPLES_LEN 14
+const uint8_t expected_init_sequence[TS4231_INIT_SAMPLES_LEN] = {
+    0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01
+};
+
 //=========================== private ==========================================
 
-void _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e) {
+bool _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
     // Configure the wait timer
     db_timer_hf_init(LH2_TIMER_DEV);
@@ -1083,12 +1096,28 @@ void _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e) {
     db_timer_hf_delay_us(LH2_TIMER_DEV, 10);
     nrf_port[gpio_e->port]->OUTCLR = 1 << gpio_e->pin;
     db_timer_hf_delay_us(LH2_TIMER_DEV, 10);
-    // Use the Envelope pin to output a clock while the data arrives.
-    for (uint8_t i = 0; i < 14; i++) {
+
+    // Use the Envelope pin to output a clock while the initialization sequence arrives.
+    uint8_t init_sequence[TS4231_INIT_SAMPLES_LEN] = { 0 };
+    for (uint8_t i = 0; i < TS4231_INIT_SAMPLES_LEN; i++) {
         nrf_port[gpio_e->port]->OUTSET = 1 << gpio_e->pin;
         db_timer_hf_delay_us(LH2_TIMER_DEV, 10);
+        init_sequence[i]               = db_gpio_read(gpio_d);
         nrf_port[gpio_e->port]->OUTCLR = 1 << gpio_e->pin;
         db_timer_hf_delay_us(LH2_TIMER_DEV, 10);
+    }
+
+    if (memcmp(init_sequence, expected_init_sequence, TS4231_INIT_SAMPLES_LEN)) {
+#if defined(DB_LED1_PIN)
+        db_gpio_init(&db_led1, DB_GPIO_OUT);
+        db_gpio_set(&db_led1);
+#endif
+        puts("\nGot invalid initialization sequence:");
+        for (uint8_t i = 0; i < TS4231_INIT_SAMPLES_LEN; i++) {
+            printf("0x%02x ", init_sequence[i]);
+        }
+        puts("");
+        return false;
     }
 
     // Finish the configuration procedure
@@ -1110,6 +1139,8 @@ void _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e) {
     _lh2_pin_set_input(gpio_e);
 
     db_timer_hf_delay_us(LH2_TIMER_DEV, 50000);
+
+    return true;
 }
 
 uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name!!
