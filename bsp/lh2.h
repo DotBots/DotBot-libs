@@ -65,8 +65,9 @@ typedef struct {
  * @param[in]   lh2 pointer to the lh2 instance
  * @param[in]   gpio_d  pointer to gpio data
  * @param[in]   gpio_e  pointer to gpio event
+ * @return bool
  */
-void db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e);
+bool db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e);
 
 /**
  * @brief Compute the location based on raw data coming from the lighthouse
