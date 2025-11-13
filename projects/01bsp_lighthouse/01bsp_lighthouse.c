@@ -11,6 +11,7 @@
  * @copyright Inria, 2022
  *
  */
+#include <stdio.h>
 #include <nrf.h>
 #include "board.h"
 #include "board_config.h"
@@ -32,7 +33,12 @@ int main(void) {
     db_board_init();
 
     // Initialize the LH2
-    db_lh2_init(&_lh2, &db_lh2_d, &db_lh2_e);
+    if (!db_lh2_init(&_lh2, &db_lh2_d, &db_lh2_e)) {
+        // LH2 initialization failed
+        puts("LH2 initialization failed");
+        return -1;
+    }
+    puts("LH2 initialized with success");
     db_lh2_start();
 
     while (1) {
