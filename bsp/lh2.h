@@ -54,7 +54,7 @@ typedef struct {
     uint32_t                  timestamps[LH2_SWEEP_COUNT][LH2_BASESTATION_COUNT];  ///< timestamp of when the raw data was received
     db_lh2_data_ready_state_t data_ready[LH2_SWEEP_COUNT][LH2_BASESTATION_COUNT];  ///< Is the data in the buffer ready to send over radio, or has it already been sent ?
     uint8_t                  *spi_ring_buffer_count_ptr;                           ///< pointer to the SPI rung buffer packet count, so the user application can read how many spi captures are waiting to be processed.
-    bool                      lh2_calibration_complete;                            ///< Indicator of LH system calibration status (False = uncalibrated)
+    bool                      lh2_calibration_complete[LH2_BASESTATION_COUNT];     ///< Indicator of LH system calibration status (False = uncalibrated)
 } db_lh2_t;
 
 //=========================== public ===========================================

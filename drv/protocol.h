@@ -94,9 +94,9 @@ typedef struct __attribute__((packed)) {
 
 /// DotBot protocol LH2 computed location
 typedef struct __attribute__((packed)) {
-    uint32_t x;  ///< X coordinate, multiplied by 1e6
-    uint32_t y;  ///< Y coordinate, multiplied by 1e6
-    uint32_t z;  ///< Z coordinate, multiplied by 1e6
+    uint32_t x;  ///< X coordinate in mm
+    uint32_t y;  ///< Y coordinate in mm
+    uint32_t z;  ///< Z coordinate in mm
 } protocol_lh2_location_t;
 
 /// DotBot protocol LH2 waypoints
@@ -107,7 +107,7 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t basestation_index;        ///< which LH basestation is this homography for?
-    int32_t homography_matrix[3][3];  ///< homography matrix, each element multiplied by 1e6
+    int32_t homography_matrix[3][3];  ///< homography matrix, each element multiplied by 1e3
 } protocol_lh2_homography_t;
 
 /// DotBot protocol GPS coordinates
