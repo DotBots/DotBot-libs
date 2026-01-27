@@ -2,8 +2,8 @@
 #define __LH2_DECODER_H_
 
 /**
- * @defgroup    bsp_lh2 LightHouse 2 decoder algorithm
- * @ingroup     bsp
+ * @defgroup    bsp_lh2_decoder LightHouse 2 decoder algorithms
+ * @ingroup     bsp_lh2
  * @brief       Algorithm to decode the lighthouse pulses, no hardware dependencies.
  *
  * @{

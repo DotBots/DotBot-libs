@@ -2,7 +2,9 @@
 #define __LH2_CHECKPOINTS_H_
 
 /**
- * @brief  Precomputed checkpoints for the LFSR index search
+ * @defgroup    bsp_lh2_checkpoints LightHouse 2 decoder checkpoints
+ * @ingroup     bsp_lh2
+ * @brief       Precomputed checkpoints for the LFSR index search
  *
  * @{
  * @file

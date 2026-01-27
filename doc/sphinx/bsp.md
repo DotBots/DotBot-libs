@@ -16,6 +16,8 @@ _api/bsp_gpio
 _api/bsp_i2c
 _api/bsp_ipc
 _api/bsp_lh2
+_api/bsp_lh2_decoder
+_api/bsp_lh2_checkpoints
 _api/bsp_nvmc
 _api/bsp_partition
 _api/bsp_pwm
