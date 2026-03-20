@@ -1,6 +1,20 @@
 #ifndef __CONTROL_LOOP_H
 #define __CONTROL_LOOP_H
 
+/**
+ * @defgroup    drv_control_loop  Control loop implementation for the DotBot
+ * @ingroup     drv
+ * @brief       Functions for computing the control loop of the DotBot
+ * 
+ * The functions compute the PWM values to apply to the motors based on the current position, direction, and target waypoint
+ *
+ * @{
+ * @file
+ * @author Alexandre Abadie <alexandre.abadie@inria.fr>
+ * @copyright Inria, 2026
+ * @}
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
 
