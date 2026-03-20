@@ -23,6 +23,14 @@
     <file file_name="battery.c" />
     <file file_name="../battery.h" />
   </project>
+  <project Name="00drv_dotbot_control_loop">
+    <configuration
+      Name="Common"
+      project_directory="control_loop"
+      project_type="Library" />
+    <file file_name="control_loop.c" />
+    <file file_name="../control_loop.h" />
+  </project>
   <project Name="00drv_dotbot_hdlc">
     <configuration
       Name="Common"
