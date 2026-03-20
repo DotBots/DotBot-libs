@@ -5,7 +5,7 @@
  * @defgroup    drv_control_loop  Control loop implementation for the DotBot
  * @ingroup     drv
  * @brief       Functions for computing the control loop of the DotBot
- * 
+ *
  * The functions compute the PWM values to apply to the motors based on the current position, direction, and target waypoint
  *
  * @{
