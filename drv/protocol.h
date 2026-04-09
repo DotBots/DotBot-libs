@@ -96,7 +96,6 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint32_t x;  ///< X coordinate in mm
     uint32_t y;  ///< Y coordinate in mm
-    uint32_t z;  ///< Z coordinate in mm
 } protocol_lh2_location_t;
 
 /// DotBot protocol LH2 waypoints
