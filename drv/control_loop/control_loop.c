@@ -27,7 +27,7 @@ bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t
     float dy       = (float)next->y - (float)origin->y;
     float distance = sqrtf(powf(dx, 2) + powf(dy, 2));
 
-    *angle = (int16_t)(atan2f(dx, dy) * -1 * 180 / M_PI);  // atan2f returns angle in radians in [-PI, PI], we want it in [0, 360] with 0 being north and positive angles being clockwise
+    *angle = (int16_t)(atan2f(dx, dy) * -1 * 180 / M_PI);  // atan2f returns angle in radians in [-PI, PI], converted here to degrees in [-180, 180] with 0 being north and positive angles being clockwise
     return distance > DB_DIRECTION_THRESHOLD;
 }
 
