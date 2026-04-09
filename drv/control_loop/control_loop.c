@@ -32,13 +32,23 @@ bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t
 }
 
 void update_control(robot_control_t *control) {
+    // Clear status flags at the start of each call
+    control->waypoint_reached = 0;
+    control->all_done         = 0;
+
     float dx                 = (float)control->waypoint_x - (float)control->pos_x;
     float dy                 = (float)control->waypoint_y - (float)control->pos_y;
     float distance_to_target = sqrtf(powf(dx, 2) + powf(dy, 2));
 
     if ((uint32_t)(distance_to_target) < control->waypoint_threshold) {
         // Target waypoint is reached
+        control->waypoint_reached = 1;
         control->waypoint_idx++;
+        if (control->waypoint_idx >= control->waypoints_length) {
+            control->pwm_left  = 0;
+            control->pwm_right = 0;
+            control->all_done  = 1;
+        }
         return;
     }
 
@@ -56,15 +66,17 @@ void update_control(robot_control_t *control) {
         angle_to_target = 0;
     }
 
-    if (control->direction >= 180) {
-        control->direction -= 360;
-    } else if (control->direction < -180) {
-        control->direction += 360;
+    // Normalise direction to [-180, 180) locally to avoid issues with angle wrapping when computing the error angle
+    int16_t direction = control->direction;
+    if (direction >= 180) {
+        direction -= 360;
+    } else if (direction < -180) {
+        direction += 360;
     }
 
     float   angular_speed = 0;
     int16_t error_angle   = 0;
-    error_angle           = angle_to_target - control->direction;
+    error_angle           = angle_to_target - direction;
     if (error_angle >= 180) {
         error_angle -= 360;
     } else if (error_angle < -180) {

@@ -29,16 +29,25 @@ typedef struct {
 
 /// Robot control struct
 typedef struct {
+    // Inputs, robot state
     uint32_t pos_x;               ///< X coordinate of the robot in mm
     uint32_t pos_y;               ///< Y coordinate of the robot in mm
-    int16_t  direction;           ///< Direction of the robot in degrees, in [0, 360], with 0 being north and positive angles being clockwise
-    uint8_t  waypoints_length;    ///< Number of waypoints in the waypoints array
-    uint8_t  waypoint_idx;        ///< Index of the current target waypoint in the waypoints array
+    int32_t  vel_x;               ///< X velocity of the robot in mm/s (from encoders; 0 if unavailable)
+    int32_t  vel_y;               ///< Y velocity of the robot in mm/s (from encoders; 0 if unavailable)
+    uint32_t dt_us;               ///< Time elapsed since last call in microseconds (for integrators / PID)
+    // Inputs, current waypoint
     uint32_t waypoint_x;          ///< X coordinate of the current target waypoint in mm
     uint32_t waypoint_y;          ///< Y coordinate of the current target waypoint in mm
     uint32_t waypoint_threshold;  ///< Distance threshold to consider a waypoint reached, in mm
+    int16_t  direction;           ///< Direction of the robot in degrees, in [0, 360], with 0 being north and positive angles being clockwise
+    uint8_t  waypoints_length;    ///< Number of waypoints in the waypoints array
+    uint8_t  waypoint_idx;        ///< Index of the current target waypoint (written by C)
+    // Outputs, actuation
     int8_t   pwm_left;            ///< PWM value for the left motor, in [-DB_MAX_PWM, DB_MAX_PWM]
     int8_t   pwm_right;           ///< PWM value for the right motor, in [-DB_MAX_PWM, DB_MAX_PWM]
+    // Outputs, status flags (written by C, read by caller)
+    uint8_t  waypoint_reached;    ///< Set to 1 by C when the current waypoint is reached, cleared on next call
+    uint8_t  all_done;            ///< Set to 1 by C when all waypoints in the batch are completed
 } robot_control_t;
 
 /**
