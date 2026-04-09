@@ -103,6 +103,6 @@ void update_control(robot_control_t *control) {
     //     control->direction,
     //     distance_to_target, dx, dy,
     //     angle_to_target, error_angle, angular_speed,
-    //     left_speed, right_speed
+    //     control->pwm_left, control->pwm_right
     // );
 }
