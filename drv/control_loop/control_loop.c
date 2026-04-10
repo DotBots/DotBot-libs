@@ -8,6 +8,7 @@
 #define DB_REDUCE_SPEED_ANGLE  (25)    ///< Angle threshold above which speed reduction is applied (degrees)
 #define DB_ANGULAR_SIDE_FACTOR (-1)    ///< Angular side factor (motor wiring convention)
 #define DB_ANGULAR_SPEED_GAIN  (0.6f)
+#define DB_DRIVE_ANGULAR_GAIN  (1.8f)  ///< Steering gain in DRIVE phase (higher than rotate gain)
 #define DB_WHEELBASE_MM        (70.0f)  ///< Distance between wheel contact points in mm
 #define DB_WHEEL_DIAMETER_MM   (50.0f)  ///< Wheel diameter in mm
 #define DB_ENCODER_CPR         (12)     ///< Encoder counts per motor shaft revolution
@@ -18,6 +19,7 @@
 #define DB_REDUCE_SPEED_ANGLE  (25)
 #define DB_ANGULAR_SIDE_FACTOR (-1)
 #define DB_ANGULAR_SPEED_GAIN  (0.6f)
+#define DB_DRIVE_ANGULAR_GAIN  (1.8f)
 #define DB_WHEELBASE_MM        (90.0f)
 #define DB_WHEEL_DIAMETER_MM   (40.0f)
 #define DB_ENCODER_CPR         (12)
@@ -28,6 +30,7 @@
 #define DB_REDUCE_SPEED_ANGLE  (20)
 #define DB_ANGULAR_SIDE_FACTOR (1)
 #define DB_ANGULAR_SPEED_GAIN  (0.6f)
+#define DB_DRIVE_ANGULAR_GAIN  (1.8f)
 #define DB_WHEELBASE_MM        (90.0f)
 #define DB_WHEEL_DIAMETER_MM   (40.0f)
 #define DB_ENCODER_CPR         (12)
@@ -267,7 +270,10 @@ void update_control(robot_control_t *control) {
         float forward_pwm = DB_MAX_PWM * speed_factor;
         if (forward_pwm < DB_MIN_FORWARD_PWM)
             forward_pwm = DB_MIN_FORWARD_PWM;
-        float angular_speed = (error_angle / 180.0f) * DB_MAX_PWM * (float)DB_ANGULAR_SIDE_FACTOR * DB_ANGULAR_SPEED_GAIN;
+        // Use a higher gain than ROTATE so steering is strong enough to curve without stopping.
+        // The inner wheel is allowed to go below DB_MIN_FORWARD_PWM — the floor only applies to
+        // the average speed, not per-wheel, so tight turns still work.
+        float angular_speed = (error_angle / 180.0f) * DB_MAX_PWM * (float)DB_ANGULAR_SIDE_FACTOR * DB_DRIVE_ANGULAR_GAIN;
         raw_left            = (int8_t)_clamp16((int16_t)(forward_pwm - angular_speed), -DB_MAX_PWM, DB_MAX_PWM);
         raw_right           = (int8_t)_clamp16((int16_t)(forward_pwm + angular_speed), -DB_MAX_PWM, DB_MAX_PWM);
     }
