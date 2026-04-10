@@ -35,8 +35,9 @@
 #endif
 
 // Navigation phase thresholds
-#define DB_ROTATE_ENTER_ANGLE (20)  ///< Enter ROTATE phase when |error_angle| exceeds this (degrees)
-#define DB_ROTATE_EXIT_ANGLE  (10)  ///< Exit ROTATE phase when |error_angle| drops below this (degrees)
+#define DB_ROTATE_ENTER_ANGLE (45)  ///< Enter ROTATE phase when |error_angle| exceeds this (degrees)
+#define DB_ROTATE_EXIT_ANGLE  (15)  ///< Exit ROTATE phase when |error_angle| drops below this (degrees)
+#define DB_DRIVE_DWELL_MIN    (3)   ///< Minimum calls in DRIVE before ROTATE re-entry is allowed
 
 // Anti-stall parameters
 #define DB_STALL_PWM_MIN      (5)   ///< Min commanded PWM below which silence is expected (no boost)
@@ -183,6 +184,7 @@ void update_control(robot_control_t *control) {
         control->boost_right       = 0;
         control->stall_count_left  = 0;
         control->stall_count_right = 0;
+        control->drive_dwell       = 0;
         control->nav_state         = DB_NAV_ROTATE;
         // Snap odo_heading to LH2 so rotation starts from a correct reference
         _reset_odo_heading_from_lh2(control);
@@ -208,8 +210,13 @@ void update_control(robot_control_t *control) {
 
     // Phase transitions
     if (control->nav_state == DB_NAV_DRIVE) {
-        if (error_angle > DB_ROTATE_ENTER_ANGLE || error_angle < -DB_ROTATE_ENTER_ANGLE) {
+        control->drive_dwell++;
+        // Only re-enter ROTATE if the error is large AND the robot has had time to settle in DRIVE.
+        // This prevents the min-PWM overshoot from immediately bouncing back into ROTATE.
+        if (control->drive_dwell >= DB_DRIVE_DWELL_MIN &&
+            (error_angle > DB_ROTATE_ENTER_ANGLE || error_angle < -DB_ROTATE_ENTER_ANGLE)) {
             control->nav_state         = DB_NAV_ROTATE;
+            control->drive_dwell       = 0;
             control->boost_left        = 0;
             control->boost_right       = 0;
             control->stall_count_left  = 0;
@@ -220,6 +227,7 @@ void update_control(robot_control_t *control) {
     } else {  // DB_NAV_ROTATE
         if (error_angle <= DB_ROTATE_EXIT_ANGLE && error_angle >= -DB_ROTATE_EXIT_ANGLE) {
             control->nav_state         = DB_NAV_DRIVE;
+            control->drive_dwell       = 0;
             control->boost_left        = 0;
             control->boost_right       = 0;
             control->stall_count_left  = 0;
@@ -238,9 +246,9 @@ void update_control(robot_control_t *control) {
         // using error_angle's sign here would flip the direction on boards where the factor is -1.
         float abs_angular    = angular_speed < 0.0f ? -angular_speed : angular_speed;
         float exit_threshold = ((float)DB_ROTATE_EXIT_ANGLE / 180.0f) * DB_MAX_PWM * DB_ANGULAR_SPEED_GAIN;
-        if (abs_angular > exit_threshold && abs_angular < (float)DB_MIN_ROTATE_PWM) {
-            angular_speed = angular_speed > 0.0f ? (float)DB_MIN_ROTATE_PWM : -(float)DB_MIN_ROTATE_PWM;
-        }
+        // if (abs_angular > exit_threshold && abs_angular < (float)DB_MIN_ROTATE_PWM) {
+        //     angular_speed = angular_speed > 0.0f ? (float)DB_MIN_ROTATE_PWM : -(float)DB_MIN_ROTATE_PWM;
+        // }
         raw_left  = (int8_t)_clamp16((int16_t)(-angular_speed), -DB_MAX_PWM, DB_MAX_PWM);
         raw_right = (int8_t)_clamp16((int16_t)(angular_speed), -DB_MAX_PWM, DB_MAX_PWM);
     } else {

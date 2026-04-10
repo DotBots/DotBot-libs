@@ -55,6 +55,7 @@ typedef struct {
     uint8_t all_done;          ///< Set to 1 by C when all waypoints in the batch are completed
     // Internal state (written and read by C only; caller must not modify)
     uint8_t nav_state;          ///< Current navigation phase (db_nav_state_t)
+    uint8_t drive_dwell;        ///< Calls spent in DRIVE phase; ROTATE re-entry gated until this reaches DB_DRIVE_DWELL_MIN
     int8_t  boost_left;         ///< Anti-stall PWM boost accumulator for the left motor
     int8_t  boost_right;        ///< Anti-stall PWM boost accumulator for the right motor
     uint8_t stall_count_left;   ///< Consecutive stall detection counter for the left motor
