@@ -53,13 +53,6 @@ typedef struct {
     // Outputs, status flags (written by C, read by caller)
     uint8_t waypoint_reached;  ///< Set to 1 by C when the current waypoint is reached, cleared on next call
     uint8_t all_done;          ///< Set to 1 by C when all waypoints in the batch are completed
-    // Internal state (written and read by C only; caller must not modify)
-    uint8_t nav_state;          ///< Current navigation phase (db_nav_state_t)
-    int8_t  boost_left;         ///< Anti-stall PWM boost accumulator for the left motor
-    int8_t  boost_right;        ///< Anti-stall PWM boost accumulator for the right motor
-    uint8_t stall_count_left;   ///< Consecutive stall detection counter for the left motor
-    uint8_t stall_count_right;  ///< Consecutive stall detection counter for the right motor
-    float   odo_heading;        ///< Odometric heading in degrees, maintained across calls
 } robot_control_t;
 
 /**
