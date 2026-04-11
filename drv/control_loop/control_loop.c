@@ -4,22 +4,22 @@
 
 #if defined(BOARD_DOTBOT_V3)
 #define DB_MAX_PWM             (60)   ///< Max speed in autonomous control mode
-#define DB_REDUCE_SPEED_FACTOR (0.8)  ///< Reduction factor applied to speed when close to target or error angle is too large
+#define DB_REDUCE_SPEED_FACTOR (0.8f) ///< Reduction factor applied to speed when close to target or error angle is too large
 #define DB_REDUCE_SPEED_ANGLE  (25)   ///< Max angle amplitude where speed reduction factor is applied
 #define DB_ANGULAR_SIDE_FACTOR (-1)   ///< Angular side factor
-#define DB_ANGULAR_SPEED_GAIN  (0.6)
+#define DB_ANGULAR_SPEED_GAIN  (0.65f)
 #elif defined(BOARD_DOTBOT_V2)
 #define DB_MAX_PWM             (70)   ///< Max speed in autonomous control mode
-#define DB_REDUCE_SPEED_FACTOR (0.8)  ///< Reduction factor applied to speed when close to target or error angle is too large
+#define DB_REDUCE_SPEED_FACTOR (0.8f) ///< Reduction factor applied to speed when close to target or error angle is too large
 #define DB_REDUCE_SPEED_ANGLE  (25)   ///< Max angle amplitude where speed reduction factor is applied
 #define DB_ANGULAR_SIDE_FACTOR (-1)   ///< Angular side factor
-#define DB_ANGULAR_SPEED_GAIN  (0.6)
+#define DB_ANGULAR_SPEED_GAIN  (0.6f)
 #else                                 // BOARD_DOTBOT_V1
 #define DB_MAX_PWM             (70)   ///< Max speed in autonomous control mode
-#define DB_REDUCE_SPEED_FACTOR (0.9)  ///< Reduction factor applied to speed when close to target or error angle is too large
+#define DB_REDUCE_SPEED_FACTOR (0.9f) ///< Reduction factor applied to speed when close to target or error angle is too large
 #define DB_REDUCE_SPEED_ANGLE  (20)   ///< Max angle amplitude where speed reduction factor is applied
 #define DB_ANGULAR_SIDE_FACTOR (1)    ///< Angular side factor
-#define DB_ANGULAR_SPEED_GAIN  (0.6)
+#define DB_ANGULAR_SPEED_GAIN  (0.6f)
 #endif
 
 bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t *angle) {
