@@ -121,7 +121,6 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     ones_counter = 0;
     jj           = 0;
     for (jj = 0; jj < 128;) {      // TODO: 128 is such an easy magic number to get rid of...
-        gg = 0;                    // TODO: this is not used here?
         if (chips1[jj] == 0x00) {  // zero, keep going, reset state
             jj++;
             ones_counter = 0;
