@@ -724,7 +724,7 @@ uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp) {
     uint32_t now          = db_timer_hf_now(LH2_TIMER_DEV);
 
     for (size_t sweep = 0; sweep < 2; sweep++) {
-        if (now - lh2->timestamps[0][basestation] > LH2_MAX_DATA_VALID_TIME_US) {
+        if (now - lh2->timestamps[sweep][basestation] > LH2_MAX_DATA_VALID_TIME_US) {
             // Remove data that is too old.
             lh2->timestamps[sweep][basestation] = 0;
             lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
