@@ -697,8 +697,13 @@ void _add_to_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t time
 }
 
 bool _get_from_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t *timestamp) {
+    // Mask the SPIM interrupt while touching shared ring-buffer state so the
+    // writer (db_lh2_handle_isr) cannot preempt mid-read and corrupt count /
+    // read_index.
+    NVIC_DisableIRQ(SPIM_IRQ);
     if (cb->count == 0) {
         // Buffer is empty
+        NVIC_EnableIRQ(SPIM_IRQ);
         return false;
     }
 
@@ -706,6 +711,7 @@ bool _get_from_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t *t
     *timestamp     = cb->timestamps[cb->read_index];
     cb->read_index = (cb->read_index + 1) % LH2_BUFFER_SIZE;
     cb->count--;
+    NVIC_EnableIRQ(SPIM_IRQ);
 
     return true;
 }
