@@ -323,7 +323,7 @@ uint8_t _determine_polynomial(uint64_t chipsH1, int8_t *start_val) {
     int32_t  bits_N_for_comp                      = 47 - *start_val;
     uint32_t bit_buffer1                          = (uint32_t)(((0xFFFF800000000000) & chipsH1) >> 47);
     uint64_t bits_from_poly[LH2_POLYNOMIAL_COUNT] = { 0 };
-    uint8_t  weights[LH2_POLYNOMIAL_COUNT]        = { 0xFF };
+    uint8_t  weights[LH2_POLYNOMIAL_COUNT]        = { 0 };
     uint8_t  selected_poly                        = LH2_POLYNOMIAL_ERROR_INDICATOR;  // initialize to error condition
     uint8_t  min_weight_idx                       = LH2_POLYNOMIAL_ERROR_INDICATOR;
     uint64_t min_weight                           = LH2_POLYNOMIAL_ERROR_INDICATOR;
