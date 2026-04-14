@@ -807,12 +807,14 @@ uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp) {
 }
 
 void db_lh2_handle_isr(void) {
-    // Reenable the PPI channel
-    db_lh2_start();
     // Read the current time.
     uint32_t timestamp = db_timer_hf_now(LH2_TIMER_DEV);
-    // Add new reading to the ring buffer
+    // Copy the just-completed capture into the ring buffer before re-arming
+    // the PPI. Otherwise the next envelope edge can restart the SPIM DMA and
+    // overwrite spi_rx_buffer while we are still reading from it.
     _add_to_spi_ring_buffer(&_lh2_vars.data, _lh2_vars.spi_rx_buffer, timestamp);
+    // Reenable the PPI channel
+    db_lh2_start();
 }
 
 //=========================== interrupts =======================================
