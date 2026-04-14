@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 #include <stdbool.h>
 
 #include "lh2.h"
@@ -38,7 +37,6 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     // TODO: make it a void and have chips be a modified pointer thingie
     // FIXME: there is an edge case where I throw away an initial "1" and do not count it in the bit-shift offset, resulting in an incorrect error of 1 in the LFSR location
     uint8_t chip_index;
-    uint8_t local_buffer[128];
     uint8_t zccs_1[128];
     uint8_t chips1[128];  // TODO: give this a better name.
     uint8_t temp_byte_N;  // TODO: bad variable name "temp byte"
@@ -59,15 +57,13 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     chip_index         = 0;
     zccs_1[chip_index] = 0x01;
 
-    memcpy(local_buffer, sample_buffer, 128);
-
     // for loop over bytes of the SPI buffer (jj), nested with a for loop over bits in each byte (ii)
     for (jj = 0; jj < 128; jj++) {
         // edge case - check if last bit (LSB) of previous byte is the same as first bit (MSB) of current byte
         // if it is not, increment chip_index and reset count
         if (jj != 0) {
-            temp_byte_M = (local_buffer[jj - 1]) & (0x01);   // previous byte's LSB
-            temp_byte_N = (local_buffer[jj] >> 7) & (0x01);  // current byte's MSB
+            temp_byte_M = (sample_buffer[jj - 1]) & (0x01);   // previous byte's LSB
+            temp_byte_N = (sample_buffer[jj] >> 7) & (0x01);  // current byte's MSB
             if (temp_byte_M != temp_byte_N) {
                 chip_index++;
                 zccs_1[chip_index] = 1;
@@ -76,7 +72,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             }
         }
         // detect intra-byte transitions with a single XOR: bit k is set when bit(k+1) != bit(k)
-        uint8_t transitions = local_buffer[jj] ^ (local_buffer[jj] >> 1);
+        uint8_t transitions = sample_buffer[jj] ^ (sample_buffer[jj] >> 1);
         for (int bit = 6; bit >= 0; bit--) {
             if ((transitions >> bit) & 1) {
                 chip_index++;
