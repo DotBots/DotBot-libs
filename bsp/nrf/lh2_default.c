@@ -320,6 +320,13 @@ void db_lh2_reset(db_lh2_t *lh2) {
             // We won't actually clear the data, it's not worth the computational effort.
         }
     }
+    // Drop any raw captures that were already queued, otherwise the next
+    // db_lh2_process_location() call would still consume pre-reset data.
+    NVIC_DisableIRQ(SPIM_IRQ);
+    _lh2_vars.data.read_index  = 0;
+    _lh2_vars.data.write_index = 0;
+    _lh2_vars.data.count       = 0;
+    NVIC_EnableIRQ(SPIM_IRQ);
 }
 
 void db_lh2_process_location(db_lh2_t *lh2) {
