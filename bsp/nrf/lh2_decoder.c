@@ -45,7 +45,6 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     uint8_t temp_byte_M;  // TODO: bad variable name "temp byte"
 
     // initialize loop variables
-    uint8_t  ii = 0x00;
     int      jj = 0;
     int      kk = 0;
     uint64_t gg = 0;
@@ -76,15 +75,14 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 zccs_1[chip_index] += 1;
             }
         }
-        // look at one byte at a time
-        for (ii = 7; ii > 0; ii--) {
-            temp_byte_M = ((local_buffer[jj]) >> (ii)) & (0x01);      // bit shift by ii and mask
-            temp_byte_N = ((local_buffer[jj]) >> (ii - 1)) & (0x01);  // bit shift by ii-1 and mask
-            if (temp_byte_M == temp_byte_N) {
-                zccs_1[chip_index] += 1;
-            } else {
+        // detect intra-byte transitions with a single XOR: bit k is set when bit(k+1) != bit(k)
+        uint8_t transitions = local_buffer[jj] ^ (local_buffer[jj] >> 1);
+        for (int bit = 6; bit >= 0; bit--) {
+            if ((transitions >> bit) & 1) {
                 chip_index++;
                 zccs_1[chip_index] = 1;
+            } else {
+                zccs_1[chip_index]++;
             }
         }
     }
