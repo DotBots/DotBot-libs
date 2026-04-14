@@ -274,12 +274,10 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             }
         } else {  // load the bit in!!
             if (chips1[chip_index] == 0) {
-                chipsH1 &= 0xFFFFFFFFFFFFFFFE;
                 chipsH1    = chipsH1 << 1;
                 gg         = gg + 1;
                 chip_index = chip_index + 1;
             } else if (chips1[chip_index] == FUZZY_CHIP) {
-                chipsH1 &= 0xFFFFFFFFFFFFFFFE;
                 chipsH1    = chipsH1 << 1;
                 gg         = gg + 1;
                 chip_index = chip_index + 1;
