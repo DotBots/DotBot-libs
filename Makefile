@@ -46,6 +46,7 @@ else ifeq (nrf5340dk-net,$(BUILD_TARGET))
     01bsp_gpio \
     01bsp_i2c \
     01bsp_nvmc \
+    01bsp_qdec \
     01bsp_radio_txrx \
     01bsp_radio_txrx_lr \
     01bsp_rng \
@@ -74,7 +75,7 @@ endif
 
 # remove incompatible apps (nrf5340) for nrf52833dk/nrf52840dk build
 ifneq (,$(filter nrf52833dk nrf52840dk,$(BUILD_TARGET)))
-  PROJECTS := $(filter-out 01bsp_qdec 01drv_move 03app_nrf5340_% 03app_freebot 03app_xgo,$(PROJECTS))
+  PROJECTS := $(filter-out 01drv_move 03app_nrf5340_% 03app_freebot 03app_xgo,$(PROJECTS))
   ARTIFACT_PROJECTS := 03app_dotbot_gateway 03app_dotbot_gateway_lr
 endif
 
