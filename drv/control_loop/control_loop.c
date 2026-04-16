@@ -1,5 +1,10 @@
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
+#ifdef DOTBOT_SIMULATION
+#include <stdlib.h>
+#endif
+#include "protocol.h"
 #include "control_loop.h"
 
 #if defined(BOARD_DOTBOT_V3)
@@ -22,6 +27,45 @@
 #define DB_ANGULAR_SPEED_GAIN  (0.6f)
 #endif
 
+/// Internal control loop state — opaque to all callers.
+typedef struct {
+    coordinate_t waypoints[DB_MAX_WAYPOINTS];
+    uint8_t      waypoints_length;
+    uint8_t      waypoint_idx;
+    uint32_t     waypoint_threshold;
+} control_loop_state_t;
+
+#ifdef DOTBOT_SIMULATION
+void *control_loop_alloc(void) {
+    return calloc(1, sizeof(control_loop_state_t));
+}
+
+void control_loop_free(void *ctx) {
+    free(ctx);
+}
+#else
+static control_loop_state_t _state = { 0 };
+
+void *control_loop_alloc(void) {
+    return &_state;
+}
+
+void control_loop_free(void *ctx) {
+    (void)ctx;
+}
+#endif
+
+void control_loop_set_waypoints(void *ctx, const coordinate_t *waypoints, uint8_t count, uint32_t threshold) {
+    control_loop_state_t *state = (control_loop_state_t *)ctx;
+    if (count > DB_MAX_WAYPOINTS) {
+        count = DB_MAX_WAYPOINTS;
+    }
+    memcpy(state->waypoints, waypoints, count * sizeof(coordinate_t));
+    state->waypoints_length   = count;
+    state->waypoint_threshold = threshold;
+    state->waypoint_idx       = 0;
+}
+
 bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t *angle) {
     float dx       = (float)next->x - (float)origin->x;
     float dy       = (float)next->y - (float)origin->y;
@@ -31,20 +75,34 @@ bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t
     return distance > DB_DIRECTION_THRESHOLD;
 }
 
-void update_control(robot_control_t *control) {
+void update_control(robot_control_t *control, void *ctx) {
+    control_loop_state_t *state = (control_loop_state_t *)ctx;
+
     // Clear status flags at the start of each call
     control->waypoint_reached = 0;
     control->all_done         = 0;
+
+    if (state->waypoints_length == 0 || state->waypoint_idx >= state->waypoints_length) {
+        control->pwm_left  = 0;
+        control->pwm_right = 0;
+        return;
+    }
+
+    // Publish current target to the I/O struct for telemetry
+    control->waypoint_idx = state->waypoint_idx;
+    control->waypoint_x   = state->waypoints[state->waypoint_idx].x;
+    control->waypoint_y   = state->waypoints[state->waypoint_idx].y;
 
     float dx                 = (float)control->waypoint_x - (float)control->pos_x;
     float dy                 = (float)control->waypoint_y - (float)control->pos_y;
     float distance_to_target = sqrtf(powf(dx, 2) + powf(dy, 2));
 
-    if ((uint32_t)(distance_to_target) < control->waypoint_threshold) {
+    if ((uint32_t)(distance_to_target) < state->waypoint_threshold) {
         // Target waypoint is reached
         control->waypoint_reached = 1;
-        control->waypoint_idx++;
-        if (control->waypoint_idx >= control->waypoints_length) {
+        state->waypoint_idx++;
+        control->waypoint_idx = state->waypoint_idx;
+        if (state->waypoint_idx >= state->waypoints_length) {
             control->pwm_left  = 0;
             control->pwm_right = 0;
             control->all_done  = 1;
@@ -84,7 +142,7 @@ void update_control(robot_control_t *control) {
     }
 
     float speedReductionFactor = 1.0;  // No reduction by default
-    if ((uint32_t)(distance_to_target) < control->waypoint_threshold * 3) {
+    if ((uint32_t)(distance_to_target) < state->waypoint_threshold * 3) {
         speedReductionFactor = DB_REDUCE_SPEED_FACTOR;
     }
 
