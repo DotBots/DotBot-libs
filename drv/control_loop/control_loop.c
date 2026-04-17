@@ -66,6 +66,39 @@ void control_loop_set_waypoints(void *ctx, const coordinate_t *waypoints, uint8_
     state->waypoint_idx       = 0;
 }
 
+// instead of pointing directly at the next waypoint, the robot
+// steers toward a lookahead point projected lookahead_dist ahead along the current segment.
+// This produces smoother, more natural curved paths through waypoints.
+static void _compute_lookahead_point(
+    float rx, float ry,
+    float px, float py,
+    float wx, float wy,
+    float  lookahead_dist,
+    float *lx, float *ly) {
+    float seg_dx     = wx - px;
+    float seg_dy     = wy - py;
+    float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+
+    if (seg_len_sq < 1.0f) {
+        *lx = wx;
+        *ly = wy;
+        return;
+    }
+    float seg_len    = sqrtf(seg_len_sq);
+    float t          = ((rx - px) * seg_dx + (ry - py) * seg_dy) / seg_len_sq;
+    float t_clamped  = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    float dist_to_wp = (1.0f - t_clamped) * seg_len;
+
+    if (dist_to_wp >= lookahead_dist) {
+        float ahead_t = t_clamped + lookahead_dist / seg_len;
+        *lx           = px + ahead_t * seg_dx;
+        *ly           = py + ahead_t * seg_dy;
+    } else {
+        *lx = wx;
+        *ly = wy;
+    }
+}
+
 bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t *angle) {
     float dx       = (float)next->x - (float)origin->x;
     float dy       = (float)next->y - (float)origin->y;
@@ -97,7 +130,23 @@ void update_control(robot_control_t *control, void *ctx) {
     float dy                 = (float)control->waypoint_y - (float)control->pos_y;
     float distance_to_target = sqrtf(powf(dx, 2) + powf(dy, 2));
 
-    if ((uint32_t)(distance_to_target) < state->waypoint_threshold) {
+    bool advance = ((uint32_t)(distance_to_target) < state->waypoint_threshold);
+
+    if (!advance && state->waypoint_idx > 0) {
+        float seg_dx     = (float)control->waypoint_x - (float)state->waypoints[state->waypoint_idx - 1].x;
+        float seg_dy     = (float)control->waypoint_y - (float)state->waypoints[state->waypoint_idx - 1].y;
+        float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+        if (seg_len_sq >= 1.0f) {
+            float t = ((float)control->pos_x - (float)state->waypoints[state->waypoint_idx - 1].x) * seg_dx +
+                      ((float)control->pos_y - (float)state->waypoints[state->waypoint_idx - 1].y) * seg_dy;
+            t /= seg_len_sq;
+            if (t >= 1.0f) {
+                advance = true;
+            }
+        }
+    }
+
+    if (advance) {
         // Target waypoint is reached
         control->waypoint_reached = 1;
         state->waypoint_idx++;
@@ -117,10 +166,23 @@ void update_control(robot_control_t *control, void *ctx) {
         return;
     }
 
-    coordinate_t next            = { .x = control->waypoint_x, .y = control->waypoint_y };
+    float lx, ly;
+    if (state->waypoint_idx > 0) {
+        _compute_lookahead_point(
+            (float)control->pos_x, (float)control->pos_y,
+            (float)state->waypoints[state->waypoint_idx - 1].x, (float)state->waypoints[state->waypoint_idx - 1].y,
+            (float)control->waypoint_x, (float)control->waypoint_y,
+            1.0f * (float)state->waypoint_threshold,
+            &lx, &ly);
+    } else {
+        lx = (float)control->waypoint_x;
+        ly = (float)control->waypoint_y;
+    }
+
+    coordinate_t lookahead_coord = { .x = (uint32_t)lx, .y = (uint32_t)ly };
     coordinate_t origin          = { .x = control->pos_x, .y = control->pos_y };
     int16_t      angle_to_target = 0;
-    if (!compute_angle(&origin, &next, &angle_to_target)) {
+    if (!compute_angle(&origin, &lookahead_coord, &angle_to_target)) {
         angle_to_target = 0;
     }
 
