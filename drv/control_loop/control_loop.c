@@ -100,6 +100,39 @@ void control_loop_set_waypoints(void *ctx, const coordinate_t *waypoints, uint8_
     // navigation commands; only the target sequence changes.
 }
 
+// instead of pointing directly at the next waypoint, the robot
+// steers toward a lookahead point projected lookahead_dist ahead along the current segment.
+// This produces smoother, more natural curved paths through waypoints.
+static void _compute_lookahead_point(
+    float rx, float ry,
+    float px, float py,
+    float wx, float wy,
+    float  lookahead_dist,
+    float *lx, float *ly) {
+    float seg_dx     = wx - px;
+    float seg_dy     = wy - py;
+    float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+
+    if (seg_len_sq < 1.0f) {
+        *lx = wx;
+        *ly = wy;
+        return;
+    }
+    float seg_len    = sqrtf(seg_len_sq);
+    float t          = ((rx - px) * seg_dx + (ry - py) * seg_dy) / seg_len_sq;
+    float t_clamped  = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    float dist_to_wp = (1.0f - t_clamped) * seg_len;
+
+    if (dist_to_wp >= lookahead_dist) {
+        float ahead_t = t_clamped + lookahead_dist / seg_len;
+        *lx           = px + ahead_t * seg_dx;
+        *ly           = py + ahead_t * seg_dy;
+    } else {
+        *lx = wx;
+        *ly = wy;
+    }
+}
+
 //=========================== EKF helpers ======================================
 
 /// Normalise an angle to [-pi, pi].
@@ -319,11 +352,27 @@ void update_control(robot_control_t *control, void *ctx) {
     control->waypoint_x   = state->waypoints[state->waypoint_idx].x;
     control->waypoint_y   = state->waypoints[state->waypoint_idx].y;
 
-    float dx                 = (float)control->waypoint_x - est_x;
-    float dy                 = (float)control->waypoint_y - est_y;
-    float distance_to_target = sqrtf(dx * dx + dy * dy);
+    float dx                 = (float)control->waypoint_x - (float)control->pos_x;
+    float dy                 = (float)control->waypoint_y - (float)control->pos_y;
+    float distance_to_target = sqrtf(powf(dx, 2) + powf(dy, 2));
 
-    if (distance_to_target < (float)state->waypoint_threshold) {
+    bool advance = ((uint32_t)(distance_to_target) < state->waypoint_threshold);
+
+    if (!advance && state->waypoint_idx > 0) {
+        float seg_dx     = (float)control->waypoint_x - (float)state->waypoints[state->waypoint_idx - 1].x;
+        float seg_dy     = (float)control->waypoint_y - (float)state->waypoints[state->waypoint_idx - 1].y;
+        float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
+        if (seg_len_sq >= 1.0f) {
+            float t = ((float)control->pos_x - (float)state->waypoints[state->waypoint_idx - 1].x) * seg_dx +
+                      ((float)control->pos_y - (float)state->waypoints[state->waypoint_idx - 1].y) * seg_dy;
+            t /= seg_len_sq;
+            if (t >= 1.0f) {
+                advance = true;
+            }
+        }
+    }
+
+    if (advance) {
         // Target waypoint is reached
         control->waypoint_reached = 1;
         state->waypoint_idx++;
@@ -336,10 +385,30 @@ void update_control(robot_control_t *control, void *ctx) {
         return;
     }
 
-    coordinate_t next            = { .x = control->waypoint_x, .y = control->waypoint_y };
-    coordinate_t origin          = { .x = (uint32_t)est_x, .y = (uint32_t)est_y };
+    if (control->direction == DB_DIRECTION_INVALID) {
+        // Unknown direction, just move forward a bit
+        control->pwm_left  = (int16_t)DB_MAX_PWM;
+        control->pwm_right = (int16_t)DB_MAX_PWM;
+        return;
+    }
+
+    float lx, ly;
+    if (state->waypoint_idx > 0) {
+        _compute_lookahead_point(
+            (float)control->pos_x, (float)control->pos_y,
+            (float)state->waypoints[state->waypoint_idx - 1].x, (float)state->waypoints[state->waypoint_idx - 1].y,
+            (float)control->waypoint_x, (float)control->waypoint_y,
+            1.0f * (float)state->waypoint_threshold,
+            &lx, &ly);
+    } else {
+        lx = (float)control->waypoint_x;
+        ly = (float)control->waypoint_y;
+    }
+
+    coordinate_t lookahead_coord = { .x = (uint32_t)lx, .y = (uint32_t)ly };
+    coordinate_t origin          = { .x = control->pos_x, .y = control->pos_y };
     int16_t      angle_to_target = 0;
-    if (!compute_angle(&origin, &next, &angle_to_target)) {
+    if (!compute_angle(&origin, &lookahead_coord, &angle_to_target)) {
         angle_to_target = 0;
     }
 
@@ -351,7 +420,8 @@ void update_control(robot_control_t *control, void *ctx) {
         direction += 360;
     }
 
-    int16_t error_angle = angle_to_target - direction;
+    int16_t error_angle   = 0;
+    error_angle           = angle_to_target - direction;
     if (error_angle >= 180) {
         error_angle -= 360;
     } else if (error_angle < -180) {
@@ -362,6 +432,7 @@ void update_control(robot_control_t *control, void *ctx) {
     if (distance_to_target < (float)(state->waypoint_threshold * 3)) {
         speed_reduction_factor = DB_REDUCE_SPEED_FACTOR;
     }
+
     if (error_angle > DB_REDUCE_SPEED_ANGLE || error_angle < -DB_REDUCE_SPEED_ANGLE) {
         speed_reduction_factor = DB_REDUCE_SPEED_FACTOR;
     }
