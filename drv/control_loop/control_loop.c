@@ -29,8 +29,8 @@
 
 // Encoder odometry constant: mm of wheel travel per encoder count.
 // Formula: pi * wheel_diameter_mm / (counts_per_rev * gear_ratio)
-// = pi * 50 / (12 * 50)
-#define MM_PER_COUNT (0.26180f)
+#define ENCODER_CPR  48.0f
+#define MM_PER_COUNT ((M_PI * 50.0f) / (ENCODER_CPR * 50.0f))
 
 // EKF physical parameter
 #define EKF_L (70.0f)  ///< Distance between the two wheels in mm (wheelbase)
