@@ -27,6 +27,7 @@
 #define DB_ANGULAR_SPEED_GAIN  (0.6f)
 #endif
 
+#if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
 // Encoder odometry constant: mm of wheel travel per encoder count.
 // Formula: pi * wheel_diameter_mm / (counts_per_rev * gear_ratio)
 #define ENCODER_CPR  48.0f
@@ -52,6 +53,7 @@
 // EKF initial covariance (set equal to R since we seed from the first measurement)
 #define EKF_P0_POS   EKF_R_POS
 #define EKF_P0_THETA EKF_R_THETA
+#endif  // DOTBOT_CONTROL_LOOP_USE_EKF
 
 /// Internal control loop state — opaque to all callers.
 typedef struct {
@@ -60,11 +62,13 @@ typedef struct {
     uint8_t      waypoints_length;
     uint8_t      waypoint_idx;
     uint32_t     waypoint_threshold;
+#if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
     // EKF state: [x_mm, y_mm, theta_rad]
     // theta uses the same convention as `direction`: 0 = north, positive = clockwise
     float ekf_x[3];   ///< State estimate [x, y, theta]
     float ekf_P[9];   ///< 3x3 covariance matrix (row-major)
     bool  ekf_ready;  ///< True once the filter has been seeded from the first LH2 fix
+#endif
 } control_loop_state_t;
 
 #ifdef DOTBOT_SIMULATION
@@ -100,6 +104,7 @@ void control_loop_set_waypoints(void *ctx, const coordinate_t *waypoints, uint8_
     // navigation commands; only the target sequence changes.
 }
 
+#if defined(DOTBOT_CONTROL_LOOP_USE_PURE_PURSUIT)
 // instead of pointing directly at the next waypoint, the robot
 // steers toward a lookahead point projected lookahead_dist ahead along the current segment.
 // This produces smoother, more natural curved paths through waypoints.
@@ -132,7 +137,9 @@ static void _compute_lookahead_point(
         *ly = wy;
     }
 }
+#endif  // DOTBOT_CONTROL_LOOP_USE_PURE_PURSUIT
 
+#if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
 //=========================== EKF helpers ======================================
 
 /// Normalise an angle to [-pi, pi].
@@ -293,6 +300,7 @@ static void _ekf_update(control_loop_state_t *state, float meas_x, float meas_y,
     _mat3_mul(ik, P, p_new);
     memcpy(P, p_new, 9 * sizeof(float));
 }
+#endif  // DOTBOT_CONTROL_LOOP_USE_EKF
 
 //=========================== public API =======================================
 
@@ -325,6 +333,12 @@ void update_control(robot_control_t *control, void *ctx) {
         return;
     }
 
+    // Position and heading from raw measurements; may be overridden below.
+    float   pos_x     = (float)control->pos_x;
+    float   pos_y     = (float)control->pos_y;
+    int16_t direction = control->direction;
+
+#if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
     float meas_theta = (float)control->direction * (float)M_PI / 180.0f;
 
     if (!state->ekf_ready) {
@@ -342,18 +356,19 @@ void update_control(robot_control_t *control, void *ctx) {
         _ekf_update(state, (float)control->pos_x, (float)control->pos_y, meas_theta);
     }
 
-    // All subsequent calculations use the EKF-filtered estimates
-    float   est_x         = state->ekf_x[0];
-    float   est_y         = state->ekf_x[1];
-    int16_t est_direction = (int16_t)(state->ekf_x[2] * 180.0f / (float)M_PI);
+    // Override raw measurements with EKF-filtered estimates
+    pos_x     = state->ekf_x[0];
+    pos_y     = state->ekf_x[1];
+    direction = (int16_t)(state->ekf_x[2] * 180.0f / (float)M_PI);
+#endif  // DOTBOT_CONTROL_LOOP_USE_EKF
 
     // Publish current target to the I/O struct for telemetry
     control->waypoint_idx = state->waypoint_idx;
     control->waypoint_x   = state->waypoints[state->waypoint_idx].x;
     control->waypoint_y   = state->waypoints[state->waypoint_idx].y;
 
-    float dx                 = (float)control->waypoint_x - est_x;
-    float dy                 = (float)control->waypoint_y - est_y;
+    float dx                 = (float)control->waypoint_x - pos_x;
+    float dy                 = (float)control->waypoint_y - pos_y;
     float distance_to_target = sqrtf(powf(dx, 2) + powf(dy, 2));
 
     bool advance = ((uint32_t)(distance_to_target) < state->waypoint_threshold);
@@ -363,8 +378,8 @@ void update_control(robot_control_t *control, void *ctx) {
         float seg_dy     = (float)control->waypoint_y - (float)state->waypoints[state->waypoint_idx - 1].y;
         float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
         if (seg_len_sq >= 1.0f) {
-            float t = (est_x - (float)state->waypoints[state->waypoint_idx - 1].x) * seg_dx +
-                      (est_y - (float)state->waypoints[state->waypoint_idx - 1].y) * seg_dy;
+            float t = (pos_x - (float)state->waypoints[state->waypoint_idx - 1].x) * seg_dx +
+                      (pos_y - (float)state->waypoints[state->waypoint_idx - 1].y) * seg_dy;
             t /= seg_len_sq;
             if (t >= 1.0f) {
                 advance = true;
@@ -385,17 +400,14 @@ void update_control(robot_control_t *control, void *ctx) {
         return;
     }
 
-    if (control->direction == DB_DIRECTION_INVALID) {
-        // Unknown direction, just move forward a bit
-        control->pwm_left  = (int16_t)DB_MAX_PWM;
-        control->pwm_right = (int16_t)DB_MAX_PWM;
-        return;
-    }
+    // Default steering target is the next waypoint; pure pursuit may override this.
+    coordinate_t target_coord = { .x = control->waypoint_x, .y = control->waypoint_y };
 
+#if defined(DOTBOT_CONTROL_LOOP_USE_PURE_PURSUIT)
     float lx, ly;
     if (state->waypoint_idx > 0) {
         _compute_lookahead_point(
-            est_x, est_y,
+            pos_x, pos_y,
             (float)state->waypoints[state->waypoint_idx - 1].x, (float)state->waypoints[state->waypoint_idx - 1].y,
             (float)control->waypoint_x, (float)control->waypoint_y,
             1.5f * (float)state->waypoint_threshold,
@@ -404,24 +416,23 @@ void update_control(robot_control_t *control, void *ctx) {
         lx = (float)control->waypoint_x;
         ly = (float)control->waypoint_y;
     }
+    target_coord = (coordinate_t){ .x = (uint32_t)lx, .y = (uint32_t)ly };
+#endif  // DOTBOT_CONTROL_LOOP_USE_PURE_PURSUIT
 
-    coordinate_t lookahead_coord = { .x = (uint32_t)lx, .y = (uint32_t)ly };
-    coordinate_t origin          = { .x = est_x, .y = est_y };
+    coordinate_t origin          = { .x = (uint32_t)pos_x, .y = (uint32_t)pos_y };
     int16_t      angle_to_target = 0;
-    if (!compute_angle(&origin, &lookahead_coord, &angle_to_target)) {
+    if (!compute_angle(&origin, &target_coord, &angle_to_target)) {
         angle_to_target = 0;
     }
 
     // Normalise direction to [-180, 180) to avoid wrap-around in error computation
-    int16_t direction = est_direction;
     if (direction >= 180) {
         direction -= 360;
     } else if (direction < -180) {
         direction += 360;
     }
 
-    int16_t error_angle   = 0;
-    error_angle           = angle_to_target - direction;
+    int16_t error_angle = angle_to_target - direction;
     if (error_angle >= 180) {
         error_angle -= 360;
     } else if (error_angle < -180) {
