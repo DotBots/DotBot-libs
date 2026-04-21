@@ -352,8 +352,8 @@ void update_control(robot_control_t *control, void *ctx) {
     control->waypoint_x   = state->waypoints[state->waypoint_idx].x;
     control->waypoint_y   = state->waypoints[state->waypoint_idx].y;
 
-    float dx                 = (float)control->waypoint_x - (float)control->pos_x;
-    float dy                 = (float)control->waypoint_y - (float)control->pos_y;
+    float dx                 = (float)control->waypoint_x - est_x;
+    float dy                 = (float)control->waypoint_y - est_y;
     float distance_to_target = sqrtf(powf(dx, 2) + powf(dy, 2));
 
     bool advance = ((uint32_t)(distance_to_target) < state->waypoint_threshold);
@@ -363,8 +363,8 @@ void update_control(robot_control_t *control, void *ctx) {
         float seg_dy     = (float)control->waypoint_y - (float)state->waypoints[state->waypoint_idx - 1].y;
         float seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy;
         if (seg_len_sq >= 1.0f) {
-            float t = ((float)control->pos_x - (float)state->waypoints[state->waypoint_idx - 1].x) * seg_dx +
-                      ((float)control->pos_y - (float)state->waypoints[state->waypoint_idx - 1].y) * seg_dy;
+            float t = (est_x - (float)state->waypoints[state->waypoint_idx - 1].x) * seg_dx +
+                      (est_y - (float)state->waypoints[state->waypoint_idx - 1].y) * seg_dy;
             t /= seg_len_sq;
             if (t >= 1.0f) {
                 advance = true;
@@ -395,10 +395,10 @@ void update_control(robot_control_t *control, void *ctx) {
     float lx, ly;
     if (state->waypoint_idx > 0) {
         _compute_lookahead_point(
-            (float)control->pos_x, (float)control->pos_y,
+            est_x, est_y,
             (float)state->waypoints[state->waypoint_idx - 1].x, (float)state->waypoints[state->waypoint_idx - 1].y,
             (float)control->waypoint_x, (float)control->waypoint_y,
-            1.0f * (float)state->waypoint_threshold,
+            1.5f * (float)state->waypoint_threshold,
             &lx, &ly);
     } else {
         lx = (float)control->waypoint_x;
@@ -406,7 +406,7 @@ void update_control(robot_control_t *control, void *ctx) {
     }
 
     coordinate_t lookahead_coord = { .x = (uint32_t)lx, .y = (uint32_t)ly };
-    coordinate_t origin          = { .x = control->pos_x, .y = control->pos_y };
+    coordinate_t origin          = { .x = est_x, .y = est_y };
     int16_t      angle_to_target = 0;
     if (!compute_angle(&origin, &lookahead_coord, &angle_to_target)) {
         angle_to_target = 0;
