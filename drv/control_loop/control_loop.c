@@ -8,23 +8,26 @@
 #include "control_loop.h"
 
 #if defined(BOARD_DOTBOT_V3)
-#define DB_MAX_PWM             (60)     ///< Max speed in autonomous control mode
-#define DB_REDUCE_SPEED_FACTOR (0.75f)  ///< Reduction factor applied to speed when close to target or error angle is too large
-#define DB_REDUCE_SPEED_ANGLE  (25)     ///< Max angle amplitude where speed reduction factor is applied
-#define DB_ANGULAR_SIDE_FACTOR (-1)     ///< Angular side factor
-#define DB_ANGULAR_SPEED_GAIN  (1.0f)
+#define DB_MAX_PWM              (60)     ///< Max speed in autonomous control mode
+#define DB_REDUCE_SPEED_FACTOR  (0.75f)  ///< Reduction factor applied to speed when close to target or error angle is too large
+#define DB_REDUCE_SPEED_ANGLE   (25)     ///< Max angle amplitude where speed reduction factor is applied
+#define DB_ANGULAR_SIDE_FACTOR  (-1)     ///< Angular side factor
+#define DB_ANGULAR_SPEED_GAIN_P (1.0f)   ///< Proportional gain for angular speed
+#define DB_ANGULAR_SPEED_GAIN_D (0.3f)   ///< Derivative gain for angular speed damping
 #elif defined(BOARD_DOTBOT_V2)
-#define DB_MAX_PWM             (70)    ///< Max speed in autonomous control mode
-#define DB_REDUCE_SPEED_FACTOR (0.8f)  ///< Reduction factor applied to speed when close to target or error angle is too large
-#define DB_REDUCE_SPEED_ANGLE  (25)    ///< Max angle amplitude where speed reduction factor is applied
-#define DB_ANGULAR_SIDE_FACTOR (-1)    ///< Angular side factor
-#define DB_ANGULAR_SPEED_GAIN  (0.6f)
-#else                                  // BOARD_DOTBOT_V1
-#define DB_MAX_PWM             (70)    ///< Max speed in autonomous control mode
-#define DB_REDUCE_SPEED_FACTOR (0.9f)  ///< Reduction factor applied to speed when close to target or error angle is too large
-#define DB_REDUCE_SPEED_ANGLE  (20)    ///< Max angle amplitude where speed reduction factor is applied
-#define DB_ANGULAR_SIDE_FACTOR (1)     ///< Angular side factor
-#define DB_ANGULAR_SPEED_GAIN  (0.6f)
+#define DB_MAX_PWM              (70)    ///< Max speed in autonomous control mode
+#define DB_REDUCE_SPEED_FACTOR  (0.8f)  ///< Reduction factor applied to speed when close to target or error angle is too large
+#define DB_REDUCE_SPEED_ANGLE   (25)    ///< Max angle amplitude where speed reduction factor is applied
+#define DB_ANGULAR_SIDE_FACTOR  (-1)    ///< Angular side factor
+#define DB_ANGULAR_SPEED_GAIN_P (0.6f)
+#define DB_ANGULAR_SPEED_GAIN_D (0.1f)  ///< Derivative gain for angular speed damping
+#else                                   // BOARD_DOTBOT_V1
+#define DB_MAX_PWM              (70)    ///< Max speed in autonomous control mode
+#define DB_REDUCE_SPEED_FACTOR  (0.9f)  ///< Reduction factor applied to speed when close to target or error angle is too large
+#define DB_REDUCE_SPEED_ANGLE   (20)    ///< Max angle amplitude where speed reduction factor is applied
+#define DB_ANGULAR_SIDE_FACTOR  (1)     ///< Angular side factor
+#define DB_ANGULAR_SPEED_GAIN_P (0.6f)
+#define DB_ANGULAR_SPEED_GAIN_D (0.1f)  ///< Derivative gain for angular speed damping
 #endif
 
 #if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
@@ -62,6 +65,7 @@ typedef struct {
     uint8_t      waypoints_length;
     uint8_t      waypoint_idx;
     uint32_t     waypoint_threshold;
+    int16_t      prev_error_angle;
 #if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
     // EKF state: [x_mm, y_mm, theta_rad]
     // theta uses the same convention as `direction`: 0 = north, positive = clockwise
@@ -100,6 +104,7 @@ void control_loop_set_waypoints(void *ctx, const coordinate_t *waypoints, uint8_
     state->waypoints_length   = count;
     state->waypoint_threshold = threshold;
     state->waypoint_idx       = 0;
+    state->prev_error_angle   = 0;
     // EKF state is NOT reset here: the robot's physical state is continuous across
     // navigation commands; only the target sequence changes.
 }
@@ -391,7 +396,8 @@ void update_control(robot_control_t *control, void *ctx) {
         // Target waypoint is reached
         control->waypoint_reached = 1;
         state->waypoint_idx++;
-        control->waypoint_idx = state->waypoint_idx;
+        state->prev_error_angle = 0;
+        control->waypoint_idx   = state->waypoint_idx;
         if (state->waypoint_idx >= state->waypoints_length) {
             control->pwm_left  = 0;
             control->pwm_right = 0;
@@ -448,7 +454,11 @@ void update_control(robot_control_t *control, void *ctx) {
         speed_reduction_factor = DB_REDUCE_SPEED_FACTOR;
     }
 
-    float angular_speed = (float)(error_angle / 180.0f) * DB_MAX_PWM * DB_ANGULAR_SIDE_FACTOR * DB_ANGULAR_SPEED_GAIN;
-    control->pwm_left   = (int16_t)((DB_MAX_PWM * speed_reduction_factor) - angular_speed);
-    control->pwm_right  = (int16_t)((DB_MAX_PWM * speed_reduction_factor) + angular_speed);
+    int16_t d_error         = error_angle - state->prev_error_angle;
+    state->prev_error_angle = error_angle;
+    float angular_speed     = ((float)error_angle / 180.0f) * DB_ANGULAR_SPEED_GAIN_P +
+                          ((float)d_error / 180.0f) * DB_ANGULAR_SPEED_GAIN_D;
+    angular_speed *= (DB_MAX_PWM * DB_ANGULAR_SIDE_FACTOR);
+    control->pwm_left  = (int16_t)((DB_MAX_PWM * speed_reduction_factor) - angular_speed);
+    control->pwm_right = (int16_t)((DB_MAX_PWM * speed_reduction_factor) + angular_speed);
 }
