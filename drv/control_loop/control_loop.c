@@ -398,10 +398,12 @@ void update_control(robot_control_t *control, void *ctx) {
         state->waypoint_idx++;
         state->prev_error_angle = 0;
         control->waypoint_idx   = state->waypoint_idx;
+        control->pwm_left /= 2;
+        control->pwm_right /= 2;
         if (state->waypoint_idx >= state->waypoints_length) {
+            control->all_done  = 1;
             control->pwm_left  = 0;
             control->pwm_right = 0;
-            control->all_done  = 1;
         }
         return;
     }
