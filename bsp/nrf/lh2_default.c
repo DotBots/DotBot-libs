@@ -320,6 +320,13 @@ void db_lh2_reset(db_lh2_t *lh2) {
             // We won't actually clear the data, it's not worth the computational effort.
         }
     }
+    // Drop any raw captures that were already queued, otherwise the next
+    // db_lh2_process_location() call would still consume pre-reset data.
+    NVIC_DisableIRQ(SPIM_IRQ);
+    _lh2_vars.data.read_index  = 0;
+    _lh2_vars.data.write_index = 0;
+    _lh2_vars.data.count       = 0;
+    NVIC_EnableIRQ(SPIM_IRQ);
 }
 
 void db_lh2_process_location(db_lh2_t *lh2) {
@@ -697,8 +704,13 @@ void _add_to_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t time
 }
 
 bool _get_from_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t *timestamp) {
+    // Mask the SPIM interrupt while touching shared ring-buffer state so the
+    // writer (db_lh2_handle_isr) cannot preempt mid-read and corrupt count /
+    // read_index.
+    NVIC_DisableIRQ(SPIM_IRQ);
     if (cb->count == 0) {
         // Buffer is empty
+        NVIC_EnableIRQ(SPIM_IRQ);
         return false;
     }
 
@@ -706,6 +718,7 @@ bool _get_from_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t *t
     *timestamp     = cb->timestamps[cb->read_index];
     cb->read_index = (cb->read_index + 1) % LH2_BUFFER_SIZE;
     cb->count--;
+    NVIC_EnableIRQ(SPIM_IRQ);
 
     return true;
 }
@@ -724,7 +737,7 @@ uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp) {
     uint32_t now          = db_timer_hf_now(LH2_TIMER_DEV);
 
     for (size_t sweep = 0; sweep < 2; sweep++) {
-        if (now - lh2->timestamps[0][basestation] > LH2_MAX_DATA_VALID_TIME_US) {
+        if (now - lh2->timestamps[sweep][basestation] > LH2_MAX_DATA_VALID_TIME_US) {
             // Remove data that is too old.
             lh2->timestamps[sweep][basestation] = 0;
             lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
@@ -807,12 +820,14 @@ uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp) {
 }
 
 void db_lh2_handle_isr(void) {
-    // Reenable the PPI channel
-    db_lh2_start();
     // Read the current time.
     uint32_t timestamp = db_timer_hf_now(LH2_TIMER_DEV);
-    // Add new reading to the ring buffer
+    // Copy the just-completed capture into the ring buffer before re-arming
+    // the PPI. Otherwise the next envelope edge can restart the SPIM DMA and
+    // overwrite spi_rx_buffer while we are still reading from it.
     _add_to_spi_ring_buffer(&_lh2_vars.data, _lh2_vars.spi_rx_buffer, timestamp);
+    // Reenable the PPI channel
+    db_lh2_start();
 }
 
 //=========================== interrupts =======================================
