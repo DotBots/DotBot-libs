@@ -4,6 +4,17 @@
  *
  * @brief  nRF52833-specific definition of the "rgb_led" bsp module.
  *
+ * The driver speaks the TLC5973D 1-wire protocol (TI 3-channel
+ * constant-current LED driver as found on the DotBot v2 RGB LED). It
+ * encodes each bit as a precise sub-microsecond pulse on a single DATA
+ * line. Because no Nordic peripheral targets that timing natively, we
+ * abuse the SPIM peripheral: at SPIM clock = 500 kHz we encode each
+ * TLC5973 bit as a byte-wide SPI pattern (LED_ZERO / LED_ONE below),
+ * pack the whole frame into an EasyDMA buffer, and let SPIM clock MOSI
+ * out at the right cadence with the CPU idle. The TLC5973 reads pulse
+ * widths off MOSI and never participates in normal SPI — there is no
+ * slave on the bus, and SCK is unused (see PSEL.SCK below).
+ *
  * @author Said Alvarado-Marin <said-alexander.alvarado-marin@inria.fr>
  *
  * @copyright Inria, 2022
@@ -34,7 +45,6 @@
 //=========================== variables =======================================
 
 static const gpio_t _mosi_pin = { .port = 0, .pin = 3 };  ///< nRF52840 P0.3
-static const gpio_t _sck_pin  = { .port = 1, .pin = 6 };  ///< nRF52840 P1.6 ( used because it's not an available pin in the BCM module).
 
 // EasyDMA buffer declaration for the RGB LED.
 typedef struct {
@@ -47,18 +57,17 @@ static rgbled_vars_t rgbled_vars;
 
 void db_rgbled_init(void) {
 
-    // Configure the necessary Pins in the GPIO peripheral, MOSI and SCK as Output
     db_gpio_init(&_mosi_pin, DB_GPIO_OUT);
-    db_gpio_init(&_sck_pin, DB_GPIO_OUT);
 
-    // Define the necessary Pins in the SPIM peripheral
     DB_NRF_SPIM->PSEL.MOSI = _mosi_pin.pin << SPIM_PSEL_MOSI_PIN_Pos |                        // Define pin number for MOSI pin
                              _mosi_pin.port << SPIM_PSEL_MOSI_PORT_Pos |                      // Define pin port for MOSI pin
                              SPIM_PSEL_MOSI_CONNECT_Connected << SPIM_PSEL_MOSI_CONNECT_Pos;  // Enable the MOSI pin
 
-    DB_NRF_SPIM->PSEL.SCK = _sck_pin.pin << SPIM_PSEL_SCK_PIN_Pos |                        // Define pin number for SCK pin
-                            _sck_pin.port << SPIM_PSEL_SCK_PORT_Pos |                      // Define pin port for SCK pin
-                            SPIM_PSEL_SCK_CONNECT_Connected << SPIM_PSEL_SCK_CONNECT_Pos;  // Enable the SCK pin
+    // SCK is intentionally NOT routed to any pin. The TLC5973 LED is
+    // clocked only by MOSI pulse widths (see file header); the SPIM
+    // peripheral still drives its internal serializer fine without an
+    // external SCK output.
+    DB_NRF_SPIM->PSEL.SCK = SPIM_PSEL_SCK_CONNECT_Disconnected << SPIM_PSEL_SCK_CONNECT_Pos;
 
     // Configure the SPIM peripheral
     DB_NRF_SPIM->FREQUENCY = SPIM_FREQUENCY_FREQUENCY_K500;                        // Set SPI frequency to 500Khz
