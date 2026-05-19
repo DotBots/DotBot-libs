@@ -43,10 +43,20 @@ project(dotbot-libs LANGUAGES C ASM)
 add_library(dotbot_libs INTERFACE)
 
 target_sources(dotbot_libs INTERFACE
+    # Pure-C startup: cpu.c defines reset_handler() and #include's the
+    # per-chip _cpu.c file (vector table, weak ISR aliases, IPC glue)
+    # based on NRF5340_XXAA / NRF_APPLICATION defines from the consumer.
+    ${CMAKE_CURRENT_SOURCE_DIR}/nRF/System/cpu.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/nRF/System/nRF5340_xxAA_Application_system_init.c
+
+    # BSP
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/nrf/board.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/bsp/nrf/clock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/nrf/gpio.c
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/nrf/pwm.c
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/nrf/timer.c
+
+    # Drivers
     ${CMAKE_CURRENT_SOURCE_DIR}/drv/motors/motors.c
     ${CMAKE_CURRENT_SOURCE_DIR}/drv/rgbled/rgbled.c
 )
@@ -55,4 +65,5 @@ target_include_directories(dotbot_libs INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp
     ${CMAKE_CURRENT_SOURCE_DIR}/bsp/conf
     ${CMAKE_CURRENT_SOURCE_DIR}/drv
+    ${CMAKE_CURRENT_SOURCE_DIR}/nRF/System  # so cpu.c can #include the per-chip _cpu.c
 )
