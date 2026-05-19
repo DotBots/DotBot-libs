@@ -32,6 +32,27 @@ CMSIS-DSP and nRF packages.
 For details on SEGGER Embedded Studio, read the
 [online documentation](https://studio.segger.com/index.htm?https://studio.segger.com/home.htm).
 
+### Opt-in CMake build (no SES license needed)
+
+A top-level `CMakeLists.txt` exports a `dotbot_libs` INTERFACE target
+that downstream CMake projects can consume:
+
+```cmake
+set(DOTBOT_LIBS /path/to/dotbot-libs)
+add_subdirectory(${DOTBOT_LIBS} dotbot-libs-build)
+
+add_executable(my_app main.c ...)
+target_link_libraries(my_app PRIVATE dotbot_libs)
+target_compile_definitions(my_app PRIVATE
+    NRF5340_XXAA NRF_APPLICATION BOARD_DOTBOT_V3
+)
+```
+
+This is additive — SES projects continue to work unchanged. Consumer
+is responsible for the toolchain (`gcc-arm-none-eabi` recommended),
+Nordic MDK + CMSIS-Core headers, startup code, and linker script.
+See `CMakeLists.txt` for the full consumer contract.
+
 [ci-badge]: https://github.com/DotBots/DotBot-libs/workflows/CI/badge.svg
 [ci-link]: https://github.com/DotBots/DotBot-libs/actions?query=workflow%3ACI+branch%3Amain
 <!-- [doc-badge]: https://readthedocs.org/projects/dotbot-libs/badge/?version=latest
