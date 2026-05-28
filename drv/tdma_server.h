@@ -6,6 +6,14 @@
  * @ingroup     drv
  * @brief       Driver for Time-Division-Multiple-Access for the Gateway radio
  *
+ * **Deprecated.** TDMA was a placeholder for swarm coordination that the
+ * Mari link layer (`mari/firmware/`) now owns properly. Bare-radio DotBot
+ * gateway firmwares should use `drv/radio.h` directly and forward frames
+ * to the host as MarilibEdge UART events; see the rewritten
+ * `apps/dotbot_gateway` in DotBot-firmware for the reference shape.
+ * This driver and its example project `projects/01drv_tdma_server/` are
+ * scheduled for removal once all downstream consumers have migrated.
+ *
  * @{
  * @file
  * @author Said Alvarado-Marin <said-alexander.alvarado-marin@inria.fr>
