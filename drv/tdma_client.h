@@ -9,7 +9,7 @@
  * **Deprecated.** TDMA was a placeholder for swarm coordination that the
  * Mari link layer (`mari/firmware/`) now owns properly. Bare-radio DotBot
  * apps should use `drv/radio.h` directly with the wire header in
- * `drv/frame.h` (mari-compatible 21-byte layout). This driver and its
+ * `drv/%frame.h` (mari-compatible 21-byte layout). This driver and its
  * example project `projects/01drv_tdma_client/` are scheduled for removal
  * once all downstream consumers have migrated.
  *
