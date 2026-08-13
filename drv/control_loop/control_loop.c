@@ -31,13 +31,19 @@
 #endif
 
 #if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
-// Encoder odometry constant: mm of wheel travel per encoder count.
-// Formula: pi * wheel_diameter_mm / (counts_per_rev * gear_ratio)
-#define ENCODER_CPR  48.0f
-#define MM_PER_COUNT ((M_PI * 50.0f) / (ENCODER_CPR * 50.0f))
+// Robot geometry and encoder odometry. These match drv/move/move.c, which
+// drives the same two QDEC counters, so both consumers of the encoders agree
+// on what a count is worth.
+#define ENCODER_CPR    (12.0f)  ///< Encoder counts per motor revolution
+#define GEAR_RATIO     (50.0f)  ///< Motor reduction factor
+#define WHEEL_DIAMETER (40.0f)  ///< Wheel diameter in mm
 
-// EKF physical parameter
-#define EKF_L (70.0f)  ///< Distance between the two wheels in mm (wheelbase)
+/// mm of wheel travel per encoder count
+#define MM_PER_COUNT ((M_PI * WHEEL_DIAMETER) / (ENCODER_CPR * GEAR_RATIO))
+
+// EKF physical parameter. move.c expresses the same geometry as a 45 mm
+// rotation radius about the robot centre, which is half of this.
+#define EKF_L (90.0f)  ///< Distance between the two wheels in mm (wheelbase)
 
 // EKF tuning — process noise Q (diagonal)
 #define EKF_Q_POS   (10.0f)   ///< Position process noise variance (mm²)
