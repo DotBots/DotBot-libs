@@ -34,7 +34,7 @@
 // Robot geometry and encoder odometry. These match drv/move/move.c, which
 // drives the same two QDEC counters, so both consumers of the encoders agree
 // on what a count is worth.
-#define ENCODER_CPR    (12.0f)  ///< Encoder counts per motor revolution
+#define ENCODER_CPR    (30.0f)  ///< Encoder counts per motor revolution
 #define GEAR_RATIO     (50.0f)  ///< Motor reduction factor
 #define WHEEL_DIAMETER (40.0f)  ///< Wheel diameter in mm
 
