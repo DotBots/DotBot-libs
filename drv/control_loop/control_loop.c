@@ -4,6 +4,7 @@
 #ifdef DOTBOT_SIMULATION
 #include <stdlib.h>
 #endif
+#include "geometry.h"
 #include "protocol.h"
 #include "control_loop.h"
 
@@ -31,20 +32,6 @@
 #endif
 
 #if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
-// Robot geometry and encoder odometry. These match drv/move/move.c, which
-// drives the same two QDEC counters, so both consumers of the encoders agree
-// on what a count is worth.
-#define ENCODER_CPR    (12.0f)  ///< Encoder counts per motor revolution
-#define GEAR_RATIO     (50.0f)  ///< Motor reduction factor
-#define WHEEL_DIAMETER (40.0f)  ///< Wheel diameter in mm
-
-/// mm of wheel travel per encoder count
-#define MM_PER_COUNT ((M_PI * WHEEL_DIAMETER) / (ENCODER_CPR * GEAR_RATIO))
-
-// EKF physical parameter. move.c expresses the same geometry as a 45 mm
-// rotation radius about the robot centre, which is half of this.
-#define EKF_L (90.0f)  ///< Distance between the two wheels in mm (wheelbase)
-
 // EKF tuning — process noise Q (diagonal)
 #define EKF_Q_POS   (10.0f)   ///< Position process noise variance (mm²)
 #define EKF_Q_THETA (0.001f)  ///< Heading process noise variance (rad²)
@@ -207,11 +194,11 @@ static bool _mat3_inv(const float a[9], float ainv[9]) {
 ///   dy = +d · cos(dir)   [e.g. dir=  0° (down):  dy = +d ✓]
 ///   ddir = -(d_right - d_left) / L   [left faster → CW → dir increases ✓]
 static void _ekf_predict(control_loop_state_t *state, int32_t enc_left, int32_t enc_right) {
-    float d_left  = (float)enc_left * MM_PER_COUNT;
-    float d_right = (float)enc_right * MM_PER_COUNT;
+    float d_left  = (float)enc_left * DB_MM_PER_COUNT;
+    float d_right = (float)enc_right * DB_MM_PER_COUNT;
     float d       = (d_left + d_right) * 0.5f;
     // Change in direction (rad): positive = CW = left wheel faster
-    float ddir = -(d_right - d_left) / EKF_L;
+    float ddir = -(d_right - d_left) / DB_TRACK;
     // Clamp to guard against wheel slip or accumulated counts over missed LH2 periods
     if (ddir > EKF_MAX_DDIR) {
         ddir = EKF_MAX_DDIR;
