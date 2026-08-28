@@ -25,10 +25,21 @@
 #include <math.h>
 
 #if defined(BOARD_DOTBOT_V3)
-#define DB_WHEEL_DIAMETER (44.0f)  ///< Wheel diameter in mm
-#define DB_TRACK          (78.0f)  ///< Distance between the two wheel mid-planes in mm
-/// Quadrature counts per motor shaft revolution: a 7 PPR encoder decoded x4.
-/// Bench check, wheel pushed by hand: 1400 counts per wheel revolution.
+/// Wheel diameter in mm, caliper-measured on a v3
+#define DB_WHEEL_DIAMETER (44.0f)
+
+/// Distance between the two wheel mid-planes in mm. The caliper reads 77; 78 is
+/// carried here so the C and Python models of the robot agree exactly.
+#define DB_TRACK (78.0f)
+
+/// Quadrature counts per motor shaft revolution.
+///
+/// Bench-measured on a v3 with the 01bsp_qdec example: pushing the robot
+/// through one wheel turn, about 140 mm, read 1400 counts on each wheel
+/// (two runs, 1399/1401 and 1408/1392, both averaging 1400.0). Dividing that
+/// by the 50:1 reduction gives the 28 here. It is also 7 pulses per
+/// revolution decoded x4, which is what the QDEC does, but that pulse count
+/// is inferred from the measurement rather than read from a datasheet.
 #define DB_ENCODER_CPR (28.0f)
 // DotBot v1 and v2, none of whose dimensions have been measured. These are the
 // values both drivers carried before the v3 bench run.
