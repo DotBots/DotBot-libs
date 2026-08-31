@@ -457,3 +457,13 @@ void update_control(robot_control_t *control, void *ctx) {
     control->pwm_left  = (int16_t)((DB_MAX_PWM * speed_reduction_factor) - angular_speed);
     control->pwm_right = (int16_t)((DB_MAX_PWM * speed_reduction_factor) + angular_speed);
 }
+
+void control_loop_get_geometry(control_loop_geometry_t *geometry) {
+    geometry->wheel_diameter_mm   = DB_WHEEL_DIAMETER;
+    geometry->track_mm            = DB_TRACK;
+    geometry->encoder_cpr         = DB_ENCODER_CPR;
+    geometry->gear_ratio          = DB_GEAR_RATIO;
+    geometry->mm_per_count        = DB_MM_PER_COUNT;
+    geometry->lh2_lever_arm_mm    = DB_LH2_LEVER_ARM;
+    geometry->lh2_lever_angle_deg = DB_LH2_LEVER_ANGLE;
+}

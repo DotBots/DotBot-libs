@@ -41,12 +41,33 @@
 /// revolution decoded x4, which is what the QDEC does, but that pulse count
 /// is inferred from the measurement rather than read from a datasheet.
 #define DB_ENCODER_CPR (28.0f)
+
+/// Distance in mm from the wheel-axle midpoint, which is where the robot turns
+/// about, to the lighthouse photodiode. Rotating the robot therefore moves the
+/// reported position even when the robot goes nowhere, and any estimator whose
+/// state is the axle midpoint has to model that.
+///
+/// Board coordinates put the axle line at y = 124.5 and the photodiode at
+/// (75.0, 71.0), on the centreline. Assumes a freely rolling front caster: if
+/// it binds the robot pivots about it instead, and the effective offset moves
+/// toward -11 mm, changing sign.
+#define DB_LH2_LEVER_ARM (53.5f)
+
+/// Direction of that offset in degrees, clockwise from body-forward. Zero
+/// because the photodiode sits on the centreline.
+#define DB_LH2_LEVER_ANGLE (0.0f)
+
 // DotBot v1 and v2, none of whose dimensions have been measured. These are the
-// values both drivers carried before the v3 bench run.
+// values both drivers carried before the v3 bench run, kept so those boards
+// behave exactly as they did. A zero lever arm is what the drivers assumed:
+// the sensor at the point of rotation. Do not "correct" these to the v3
+// numbers; they describe different hardware.
 #else
-#define DB_WHEEL_DIAMETER (40.0f)  ///< Wheel diameter in mm
-#define DB_TRACK          (90.0f)  ///< Distance between the two wheel mid-planes in mm
-#define DB_ENCODER_CPR    (12.0f)  ///< Quadrature counts per motor shaft revolution
+#define DB_WHEEL_DIAMETER  (40.0f)  ///< Wheel diameter in mm
+#define DB_TRACK           (90.0f)  ///< Distance between the two wheel mid-planes in mm
+#define DB_ENCODER_CPR     (12.0f)  ///< Quadrature counts per motor shaft revolution
+#define DB_LH2_LEVER_ARM   (0.0f)   ///< Axle midpoint to photodiode, in mm
+#define DB_LH2_LEVER_ANGLE (0.0f)   ///< Direction of that offset, degrees clockwise from forward
 #endif
 
 #define DB_GEAR_RATIO (50.0f)  ///< Motor shaft revolutions per wheel revolution
