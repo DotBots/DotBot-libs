@@ -1,6 +1,6 @@
 /**
  * @file
- * @ingroup bsp_motors
+ * @ingroup drv_motors
  *
  * @brief  nRF52833-specific definition of the "motors bsp module.
  *
