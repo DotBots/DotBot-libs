@@ -10,9 +10,9 @@
  * measurement lands in one place and the drivers cannot drift apart.
  *
  * These values are per-board but deliberately do not live in bsp/conf/ with
- * the rest of the board configuration: control_loop.c is also compiled on the
+ * the rest of the board configuration: %control_loop.c is also compiled on the
  * host for the simulator, with only drv/ on the include path, and reaching
- * bsp/conf/ means going through board_config.h, which pulls in gpio.h and the
+ * bsp/conf/ means going through %board_config.h, which pulls in %gpio.h and the
  * nRF headers. Keep this header free of hardware dependencies so both builds
  * can read it.
  *
