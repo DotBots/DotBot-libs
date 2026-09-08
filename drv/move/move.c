@@ -16,6 +16,7 @@
 #include <math.h>
 #include "board.h"
 #include "board_config.h"
+#include "geometry.h"
 #include "motors.h"
 #include "qdec.h"
 #include "timer.h"
@@ -24,15 +25,11 @@
 
 //=========================== define ===========================================
 
-#define REFRESH_DELAY_MS       (10)  //< ms
-#define DOTBOT_MOTOR_REDUCTION (50)  //< Motor reduction factor
-#define DOTBOT_ENCODER_CPR     (12)  //< Encoder count per rotation
-#define DOTBOT_WHEEL_RADIUS    (20)  //< mm
-#define DOTBOT_RADIUS          (45)  //< mm
-#define QDEC_LEFT              (0)
-#define QDEC_RIGHT             (1)
-#define MOTOR_OFFSET           (5)
-#define MOVE_TIMER_DEV         (0)
+#define REFRESH_DELAY_MS (10)  //< ms
+#define QDEC_LEFT        (0)
+#define QDEC_RIGHT       (1)
+#define MOTOR_OFFSET     (5)
+#define MOVE_TIMER_DEV   (0)
 
 //=========================== variables ========================================
 
@@ -52,7 +49,7 @@ static int32_t _previous_right_accumulator = 0;
 //=========================== private ==========================================
 
 static float _distance_from_angle(uint16_t angle) {
-    return ((float)angle * DOTBOT_RADIUS * M_PI) / 180;
+    return ((float)angle * (DB_TRACK / 2) * M_PI) / 180;
 }
 
 static void _move_reset(void) {
@@ -106,8 +103,8 @@ void db_move_straight(uint16_t distance, int8_t speed) {
     int16_t prev_left_count  = 0;
     int16_t prev_right_count = 0;
     int16_t left_diff, right_diff;
-    float   counts_per_rev      = DOTBOT_ENCODER_CPR * DOTBOT_MOTOR_REDUCTION;
-    float   wheel_diameter      = DOTBOT_WHEEL_RADIUS * 2;
+    float   counts_per_rev      = DB_ENCODER_CPR * DB_GEAR_RATIO;
+    float   wheel_diameter      = DB_WHEEL_DIAMETER;
     float   wheel_circumference = M_PI * wheel_diameter;
     float   rev_count           = expected_distance / wheel_circumference;
     float   target_count        = rev_count * counts_per_rev;
@@ -163,8 +160,8 @@ void db_move_rotate(uint16_t angle, int8_t speed) {
     int16_t prev_left_count  = 0;
     int16_t prev_right_count = 0;
     int16_t left_diff, right_diff;
-    float   counts_per_rev      = DOTBOT_ENCODER_CPR * DOTBOT_MOTOR_REDUCTION;
-    float   wheel_diameter      = DOTBOT_WHEEL_RADIUS * 2;
+    float   counts_per_rev      = DB_ENCODER_CPR * DB_GEAR_RATIO;
+    float   wheel_diameter      = DB_WHEEL_DIAMETER;
     float   wheel_circumference = M_PI * wheel_diameter;
     float   rev_count           = expected_distance / wheel_circumference;
     float   target_count        = rev_count * counts_per_rev;

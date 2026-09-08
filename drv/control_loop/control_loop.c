@@ -4,6 +4,7 @@
 #ifdef DOTBOT_SIMULATION
 #include <stdlib.h>
 #endif
+#include "geometry.h"
 #include "protocol.h"
 #include "control_loop.h"
 
@@ -31,14 +32,6 @@
 #endif
 
 #if defined(DOTBOT_CONTROL_LOOP_USE_EKF)
-// Encoder odometry constant: mm of wheel travel per encoder count.
-// Formula: pi * wheel_diameter_mm / (counts_per_rev * gear_ratio)
-#define ENCODER_CPR  48.0f
-#define MM_PER_COUNT ((M_PI * 50.0f) / (ENCODER_CPR * 50.0f))
-
-// EKF physical parameter
-#define EKF_L (70.0f)  ///< Distance between the two wheels in mm (wheelbase)
-
 // EKF tuning — process noise Q (diagonal)
 #define EKF_Q_POS   (10.0f)   ///< Position process noise variance (mm²)
 #define EKF_Q_THETA (0.001f)  ///< Heading process noise variance (rad²)
@@ -201,11 +194,11 @@ static bool _mat3_inv(const float a[9], float ainv[9]) {
 ///   dy = +d · cos(dir)   [e.g. dir=  0° (down):  dy = +d ✓]
 ///   ddir = -(d_right - d_left) / L   [left faster → CW → dir increases ✓]
 static void _ekf_predict(control_loop_state_t *state, int32_t enc_left, int32_t enc_right) {
-    float d_left  = (float)enc_left * MM_PER_COUNT;
-    float d_right = (float)enc_right * MM_PER_COUNT;
+    float d_left  = (float)enc_left * DB_MM_PER_COUNT;
+    float d_right = (float)enc_right * DB_MM_PER_COUNT;
     float d       = (d_left + d_right) * 0.5f;
     // Change in direction (rad): positive = CW = left wheel faster
-    float ddir = -(d_right - d_left) / EKF_L;
+    float ddir = -(d_right - d_left) / DB_TRACK;
     // Clamp to guard against wheel slip or accumulated counts over missed LH2 periods
     if (ddir > EKF_MAX_DDIR) {
         ddir = EKF_MAX_DDIR;
@@ -463,4 +456,14 @@ void update_control(robot_control_t *control, void *ctx) {
     angular_speed *= (DB_MAX_PWM * DB_ANGULAR_SIDE_FACTOR);
     control->pwm_left  = (int16_t)((DB_MAX_PWM * speed_reduction_factor) - angular_speed);
     control->pwm_right = (int16_t)((DB_MAX_PWM * speed_reduction_factor) + angular_speed);
+}
+
+void control_loop_get_geometry(control_loop_geometry_t *geometry) {
+    geometry->wheel_diameter_mm   = DB_WHEEL_DIAMETER;
+    geometry->track_mm            = DB_TRACK;
+    geometry->encoder_cpr         = DB_ENCODER_CPR;
+    geometry->gear_ratio          = DB_GEAR_RATIO;
+    geometry->mm_per_count        = DB_MM_PER_COUNT;
+    geometry->lh2_lever_arm_mm    = DB_LH2_LEVER_ARM;
+    geometry->lh2_lever_angle_deg = DB_LH2_LEVER_ANGLE;
 }

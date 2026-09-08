@@ -42,4 +42,15 @@ void db_motors_init(void);
  */
 void db_motors_set_speed(int16_t l_speed, int16_t r_speed);
 
+/**
+ * @brief Short the motor windings so the wheels resist being turned
+ *
+ *  Drives both inputs of each H-bridge high, which is the DRV8833's brake
+ *  state. Setting a speed of zero instead leaves both inputs low, which is
+ *  coast: the outputs go high-impedance and the wheels freewheel.
+ *
+ *  Released by any subsequent db_motors_set_speed() call.
+ */
+void db_motors_brake(void);
+
 #endif

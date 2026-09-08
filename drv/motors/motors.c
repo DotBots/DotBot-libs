@@ -1,6 +1,6 @@
 /**
  * @file
- * @ingroup bsp_motors
+ * @ingroup drv_motors
  *
  * @brief  nRF52833-specific definition of the "motors bsp module.
  *
@@ -27,6 +27,15 @@
 
 void db_motors_init(void) {
     db_pwm_init(PWM_DEV, db_motors_pins, PWM_CHANNELS, M_TOP);
+}
+
+void db_motors_brake(void) {
+    // Full duty on both inputs of each bridge holds them high, which is the
+    // DRV8833 brake state. db_pwm_channels_set sets bit 15 on every value, so
+    // the compare is the high time and M_TOP is the whole period.
+    uint16_t pwm_seq[PWM_CHANNELS] = { M_TOP, M_TOP, M_TOP, M_TOP };
+
+    db_pwm_channels_set(PWM_DEV, pwm_seq);
 }
 
 void db_motors_set_speed(int16_t l_speed, int16_t r_speed) {

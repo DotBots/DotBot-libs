@@ -107,4 +107,23 @@ bool compute_angle(const coordinate_t *origin, const coordinate_t *next, int16_t
  */
 void update_control(robot_control_t *control, void *ctx);
 
+/// The robot dimensions this library was compiled with, so a host that keeps
+/// its own copy can check the two against each other.
+typedef struct {
+    float wheel_diameter_mm;    ///< Wheel diameter
+    float track_mm;             ///< Distance between the two wheel mid-planes
+    float encoder_cpr;          ///< Quadrature counts per motor shaft revolution
+    float gear_ratio;           ///< Motor shaft revolutions per wheel revolution
+    float mm_per_count;         ///< Wheel travel per encoder count
+    float lh2_lever_arm_mm;     ///< Axle midpoint to the lighthouse photodiode
+    float lh2_lever_angle_deg;  ///< Direction of that offset, clockwise from forward
+} control_loop_geometry_t;
+
+/**
+ * @brief Read the geometry compiled into this library.
+ *
+ * @param geometry  Pointer to the struct to fill.
+ */
+void control_loop_get_geometry(control_loop_geometry_t *geometry);
+
 #endif  // __CONTROL_LOOP_H

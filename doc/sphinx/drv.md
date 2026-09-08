@@ -13,6 +13,7 @@ _api/drv_as5048b
 _api/drv_battery
 _api/drv_control_loop
 _api/drv_frame
+_api/drv_geometry
 _api/drv_hdlc
 _api/drv_imu
 _api/drv_ism330
