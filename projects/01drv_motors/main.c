@@ -50,7 +50,7 @@ int main(void) {
     while (1) {
         for (int16_t pwm = SWEEP_PWM_START; pwm <= SWEEP_PWM_STOP; pwm += SWEEP_PWM_STEP) {
             // Forward, at one PWM
-            db_motors_set_speed(pwm, pwm);
+            db_motors_set_pwm(pwm, pwm);
             db_timer_delay_ms(TIMER_DEV, HOLD_MS);
 
             // Brake: windings shorted. The wheels should stop dead, and resist
@@ -61,16 +61,16 @@ int main(void) {
             // Coast: both inputs low, outputs high-impedance. Same entry speed as
             // the brake above, so the difference in stopping distance and in how
             // freely the wheels turn by hand is the whole comparison.
-            db_motors_set_speed(0, 0);
+            db_motors_set_pwm(0, 0);
             db_timer_delay_ms(TIMER_DEV, STOP_MS);
 
             // Backward, at the same PWM
-            db_motors_set_speed(-pwm, -pwm);
+            db_motors_set_pwm(-pwm, -pwm);
             db_timer_delay_ms(TIMER_DEV, HOLD_MS);
 
             db_motors_brake();
             db_timer_delay_ms(TIMER_DEV, STOP_MS);
-            db_motors_set_speed(0, 0);
+            db_motors_set_pwm(0, 0);
             db_timer_delay_ms(TIMER_DEV, STOP_MS);
         }
     }

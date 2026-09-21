@@ -38,47 +38,53 @@ void db_motors_brake(void) {
     db_pwm_channels_set(PWM_DEV, pwm_seq);
 }
 
-void db_motors_set_speed(int16_t l_speed, int16_t r_speed) {
+void db_motors_coast(void) {
+    uint16_t pwm_seq[PWM_CHANNELS] = { 0 };
+
+    db_pwm_channels_set(PWM_DEV, pwm_seq);
+}
+
+void db_motors_set_pwm(int16_t l_pwm, int16_t r_pwm) {
 
     // Double check for out-of-bound values.
-    if (l_speed > 100)
-        l_speed = 100;
-    if (r_speed > 100)
-        r_speed = 100;
+    if (l_pwm > 100)
+        l_pwm = 100;
+    if (r_pwm > 100)
+        r_pwm = 100;
 
-    if (l_speed < -100)
-        l_speed = -100;
-    if (r_speed < -100)
-        r_speed = -100;
+    if (l_pwm < -100)
+        l_pwm = -100;
+    if (r_pwm < -100)
+        r_pwm = -100;
 
     uint16_t pwm_seq[PWM_CHANNELS] = { 0 };
 
     // Left motor processing
-    if (l_speed >= 0)  // Positive values turn the motor forward.
+    if (l_pwm >= 0)  // Positive values turn the motor forward.
     {
-        pwm_seq[0] = l_speed;
+        pwm_seq[0] = l_pwm;
         pwm_seq[1] = 0;
     }
-    if (l_speed < 0)  // Negative values turn the motor backward.
+    if (l_pwm < 0)  // Negative values turn the motor backward.
     {
-        l_speed *= -1;  // remove the negative before loading into memory
+        l_pwm *= -1;  // remove the negative before loading into memory
 
         pwm_seq[0] = 0;
-        pwm_seq[1] = l_speed;
+        pwm_seq[1] = l_pwm;
     }
 
     // Right motor processing
-    if (r_speed >= 0)  // Positive values turn the motor forward.
+    if (r_pwm >= 0)  // Positive values turn the motor forward.
     {
-        pwm_seq[2] = r_speed;
+        pwm_seq[2] = r_pwm;
         pwm_seq[3] = 0;
     }
-    if (r_speed < 0)  // Negative values turn the motor backward.
+    if (r_pwm < 0)  // Negative values turn the motor backward.
     {
-        r_speed *= -1;  // remove the negative before loading into memory
+        r_pwm *= -1;  // remove the negative before loading into memory
 
         pwm_seq[2] = 0;
-        pwm_seq[3] = r_speed;
+        pwm_seq[3] = r_pwm;
     }
 
     // Update PWM values

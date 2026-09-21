@@ -108,7 +108,7 @@ void db_move_straight(uint16_t distance, int8_t speed) {
     float   wheel_circumference = M_PI * wheel_diameter;
     float   rev_count           = expected_distance / wheel_circumference;
     float   target_count        = rev_count * counts_per_rev;
-    db_motors_set_speed(left_power, right_power);
+    db_motors_set_pwm(left_power, right_power);
 
     while (abs(right_count) < fabs(target_count)) {
         left_count       = db_qdec_read(QDEC_LEFT);
@@ -124,11 +124,11 @@ void db_move_straight(uint16_t distance, int8_t speed) {
             left_power  = left_power + offset;
             right_power = right_power - offset;
         }
-        db_motors_set_speed(left_power, right_power);
+        db_motors_set_pwm(left_power, right_power);
         db_timer_delay_ms(MOVE_TIMER_DEV, REFRESH_DELAY_MS);
     }
 
-    db_motors_set_speed(0, 0);
+    db_motors_set_pwm(0, 0);
 }
 
 void db_move_rotate(uint16_t angle, int8_t speed) {
@@ -165,7 +165,7 @@ void db_move_rotate(uint16_t angle, int8_t speed) {
     float   wheel_circumference = M_PI * wheel_diameter;
     float   rev_count           = expected_distance / wheel_circumference;
     float   target_count        = rev_count * counts_per_rev;
-    db_motors_set_speed(left_power, right_power);
+    db_motors_set_pwm(left_power, right_power);
 
     while (abs(right_count) < fabs(target_count)) {
         left_count       = db_qdec_read(QDEC_LEFT);
@@ -181,9 +181,9 @@ void db_move_rotate(uint16_t angle, int8_t speed) {
             left_power += offset;
             right_power += offset;
         }
-        db_motors_set_speed(left_power, right_power);
+        db_motors_set_pwm(left_power, right_power);
         db_timer_delay_ms(MOVE_TIMER_DEV, REFRESH_DELAY_MS);
     }
 
-    db_motors_set_speed(0, 0);
+    db_motors_set_pwm(0, 0);
 }
