@@ -37,7 +37,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     // TODO: make it a void and have chips be a modified pointer thingie
     // FIXME: there is an edge case where I throw away an initial "1" and do not count it in the bit-shift offset, resulting in an incorrect error of 1 in the LFSR location
     uint8_t chip_index;
-    uint8_t zccs_1[128];
+    uint8_t zccs_1[256];  // indexed by the uint8_t chip_index, which counts past 128 on a busy capture
     uint8_t chips1[128];  // TODO: give this a better name.
     uint8_t temp_byte_N;  // TODO: bad variable name "temp byte"
     uint8_t temp_byte_M;  // TODO: bad variable name "temp byte"
