@@ -32,6 +32,14 @@ jobs:
     - name: build succeeded
       run: exit 0
 
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Run host-side tests
+        run: make test
+
   style:
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +77,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # needs: [docker, doc, style, build-success]
-    needs: [doc, style, build-success]
+    needs: [doc, style, host-tests, build-success]
     if: >-
       github.event_name == 'push' &&
       startsWith(github.event.ref, 'refs/tags')

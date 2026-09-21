@@ -71,3 +71,6 @@ Output/
 
 # artifacts
 artifacts/
+
+# host-side test builds
+build/

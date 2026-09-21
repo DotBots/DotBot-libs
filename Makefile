@@ -87,7 +87,7 @@ ifneq (,$(filter nrf5340dk-net,$(BUILD_TARGET)))
   ARTIFACT_PROJECTS := 03app_nrf5340_net
 endif
 
-DIRS ?= bsp crypto drv projects
+DIRS ?= bsp crypto drv projects tests
 SRCS ?= $(foreach dir,$(DIRS),$(shell find $(dir) -name "*.[c|h]"))
 CLANG_FORMAT ?= clang-format
 CLANG_FORMAT_TYPE ?= file
@@ -97,7 +97,7 @@ ARTIFACT_HEX = $(ARTIFACT_ELF:.elf=.hex)
 ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 
-.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format
+.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test
 
 all: $(PROJECTS)
 
@@ -121,6 +121,19 @@ format:
 
 check-format:
 	@$(CLANG_FORMAT) --dry-run --Werror --style=$(CLANG_FORMAT_TYPE) $(SRCS)
+
+# Host-side tests of the hardware-free drivers; gnu11 because glibc hides
+# M_PI under strict C11
+HOST_CC ?= cc
+HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
+TEST_BUILD_DIR ?= build/tests
+
+test: $(TEST_BUILD_DIR)/test_wheel_control
+	$(TEST_BUILD_DIR)/test_wheel_control
+
+$(TEST_BUILD_DIR)/test_wheel_control: tests/test_wheel_control.c drv/wheel_control/wheel_control.c drv/wheel_control.h drv/geometry.h
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_wheel_control.c drv/wheel_control/wheel_control.c -lm
 
 artifacts: $(ARTIFACT_PROJECTS)
 	@mkdir -p artifacts
