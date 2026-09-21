@@ -63,8 +63,10 @@ void db_qdec_init(qdec_t qdec, const qdec_conf_t *conf, qdec_cb_t callback, void
     NVIC_ClearPendingIRQ(QDEC0_IRQn + qdec);
     NVIC_EnableIRQ(QDEC0_IRQn + qdec);
 
-    // Enable debounce filter
-    _qdec_devs[qdec]->DBFEN = QDEC_DBFEN_DBFEN_Enabled << QDEC_DBFEN_DBFEN_Pos;
+    // No debounce filter: the encoders give clean edges, and with the filter a
+    // state has to hold for two sample periods to count, which drops counts
+    // above about 3900 counts/s
+    _qdec_devs[qdec]->DBFEN = QDEC_DBFEN_DBFEN_Disabled << QDEC_DBFEN_DBFEN_Pos;
 
     // Enable and start peripheral
     _qdec_devs[qdec]->ENABLE = (QDEC_ENABLE_ENABLE_Enabled << QDEC_ENABLE_ENABLE_Pos);
@@ -82,6 +84,15 @@ int32_t db_qdec_read_and_clear(qdec_t qdec) {
     int32_t count                    = (int32_t)_qdec_devs[qdec]->ACCREAD + (1023 * _qdec_vars[qdec].overflow) - (1024 * _qdec_vars[qdec].underflow);
     _qdec_vars[qdec].overflow        = 0;
     _qdec_vars[qdec].underflow       = 0;
+    return count;
+}
+
+int32_t db_qdec_read_and_clear_dbl(qdec_t qdec, uint32_t *dbl) {
+    _qdec_devs[qdec]->TASKS_READCLRACC = 1;
+    int32_t count                      = (int32_t)_qdec_devs[qdec]->ACCREAD + (1023 * _qdec_vars[qdec].overflow) - (1024 * _qdec_vars[qdec].underflow);
+    *dbl                               = _qdec_devs[qdec]->ACCDBLREAD;
+    _qdec_vars[qdec].overflow          = 0;
+    _qdec_vars[qdec].underflow         = 0;
     return count;
 }
 
