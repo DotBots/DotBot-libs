@@ -16,6 +16,9 @@
  * nRF headers. Keep this header free of hardware dependencies so both builds
  * can read it.
  *
+ * Units across drv/: lengths in millimetres, speeds in mm/s, angles in
+ * degrees. Radians and metres appear only inside a function that converts.
+ *
  * @{
  * @file
  * @copyright Inria, 2026
