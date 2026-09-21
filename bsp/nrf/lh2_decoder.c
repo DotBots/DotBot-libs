@@ -354,7 +354,7 @@ uint8_t _determine_polynomial(uint64_t chipsH1, int8_t *start_val) {
         // Check against all the known polynomials
         for (uint8_t i = 0; i < LH2_POLYNOMIAL_COUNT; i++) {
             bits_from_poly[i] = (((_poly_check(_polynomials[i], bit_buffer1, bits_N_for_comp)) << (64 - 17 - (*start_val) - bits_N_for_comp)) | (chipsH1 & (0xFFFFFFFFFFFFFFFF << (64 - (*start_val)))));
-            weights[i]        = __builtin_popcount(bits_from_poly[i] ^ bits_to_compare);
+            weights[i]        = __builtin_popcountll(bits_from_poly[i] ^ bits_to_compare);
             // Keep track of the minimum weight value and which polinimial generated it.
             if (weights[i] < min_weight) {
                 min_weight_idx = i;
