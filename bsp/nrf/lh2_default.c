@@ -409,6 +409,18 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     // Undo the bit offset introduced above, to get the LFSR position of the first bit that hit the sensor.
     temp_lfsr_loc -= temp_bit_offset;
 
+    // A count past a full rotation, or equal to the other sweep's, comes from a false polynomial match
+    if (temp_lfsr_loc > _periods[basestation] / 8) {
+        lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
+        return;
+    }
+    uint8_t other_sweep = sweep ^ 1;
+    if (lh2->data_ready[other_sweep][basestation] == DB_LH2_PROCESSED_DATA_AVAILABLE && lh2->locations[other_sweep][basestation].lfsr_counts == temp_lfsr_loc) {
+        lh2->data_ready[sweep][basestation]       = DB_LH2_NO_NEW_DATA;
+        lh2->data_ready[other_sweep][basestation] = DB_LH2_NO_NEW_DATA;
+        return;
+    }
+
     //*********************************************************************************//
     //                                 Store results                                   //
     //*********************************************************************************//
