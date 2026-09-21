@@ -88,7 +88,11 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         error     = 0;
     } else {
         wheel->ff = sign * (conf->u_run + conf->k_run * fabsf(wheel->setpoint));
-        wheel->integral += error * dt;
+        // Outside the zone the wheel is still getting up to speed, and what
+        // the integral would store there is the overshoot at the end of it
+        if (fabsf(error) < conf->i_zone) {
+            wheel->integral += error * dt;
+        }
     }
 
     // Anti-windup: the integral may only hold what the output range still has

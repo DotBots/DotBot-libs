@@ -91,6 +91,7 @@ static const db_wheel_control_conf_t _conf = {
     .u_breakaway       = 45.0f,
     .u_run             = 20.0f,
     .k_run             = 0.055f,
+    .i_zone            = 50.0f,
     .pwm_max           = 75.0f,
     .pwm_slew_per_tick = 20.0f,
 };
@@ -288,6 +289,16 @@ static void test_twist(void) {
     CHECK(fabsf(l - half) < 1e-3f && fabsf(r + half) < 1e-3f, "clockwise speeds the left wheel up: got %.2f %.2f, want %.2f %.2f", l, r, half, -half);
 }
 
+static void test_integral_zone(void) {
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, 400);
+    db_wheel_control_step(&w, 5, 1);
+    CHECK(w.integral == 0, "far below the setpoint the integral holds still, holds %.2f", w.integral);
+    db_wheel_control_step(&w, 38, 1);
+    CHECK(w.integral != 0, "inside the zone the integral accumulates, holds %.2f", w.integral);
+}
+
 static void test_sign_change_clears_integral(void) {
     db_wheel_control_t w;
     plant_t            p;
@@ -313,6 +324,7 @@ int main(void) {
     test_counts();
     test_twist();
     test_sign_change_clears_integral();
+    test_integral_zone();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

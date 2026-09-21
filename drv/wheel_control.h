@@ -39,6 +39,7 @@ typedef struct {
     float u_breakaway;        ///< duty that starts a stalled wheel
     float u_run;              ///< duty of the running line at zero speed
     float k_run;              ///< slope of the running line, duty per mm/s
+    float i_zone;             ///< the integral only accumulates while |error| is below this, mm/s
     float pwm_max;            ///< output saturation, duty
     float pwm_slew_per_tick;  ///< largest output change in one step, duty
 } db_wheel_control_conf_t;
