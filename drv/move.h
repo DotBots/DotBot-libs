@@ -6,6 +6,10 @@
  * @ingroup     drv
  * @brief       High level move commands for DotBot: move straight, rotate
  *
+ * Deprecated: these calls block and steer on raw encoder counts with no
+ * speed loop. Waypoint driving on the wheel-velocity loop (drv_wheel_control)
+ * replaces them; do not build new behaviour on this module.
+ *
  * @{
  * @file
  * @author Alexandre Abadie <alexandre.abadie@inria.fr>
@@ -32,8 +36,8 @@ void db_move_deinit(void);
 /**
  * @brief   Move straight by a given distance at a given speed
  *
- * @param[in]   distance        Distance in centimeters
- * @param[in]   speed           Move speed, -100 to 100
+ * @param[in]   distance        Distance in millimeters
+ * @param[in]   speed           Motor duty, -100 to 100
  */
 void db_move_straight(uint16_t distance, int8_t speed);
 
@@ -41,7 +45,7 @@ void db_move_straight(uint16_t distance, int8_t speed);
  * @brief   Rotate by a given angle at a given speed
  *
  * @param[in]   angle           Angle of clockwise rotation in degrees
- * @param[in]   speed           Rotation speed, -100 to 100
+ * @param[in]   speed           Motor duty, -100 to 100
  */
 void db_move_rotate(uint16_t angle, int8_t speed);
 
