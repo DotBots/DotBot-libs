@@ -45,6 +45,7 @@ void db_wheel_control_reset(db_wheel_control_t *wheel) {
     wheel->measured    = 0;
     wheel->ff          = 0;
     wheel->still_ticks = STALL_TICKS;
+    wheel->kick_boost  = 0;
 }
 
 void db_wheel_control_set_setpoint(db_wheel_control_t *wheel, float mm_per_s) {
@@ -71,9 +72,10 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
     }
 
     if (wheel->setpoint == 0) {
-        wheel->integral = 0;
-        wheel->pwm      = 0;
-        wheel->ff       = 0;
+        wheel->kick_boost = 0;
+        wheel->integral   = 0;
+        wheel->pwm        = 0;
+        wheel->ff         = 0;
         return 0;
     }
 
@@ -83,11 +85,16 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
     // A stalled wheel gets the kick alone: its measured speed of zero says
     // nothing about how far the running wheel will be from the setpoint, so
     // neither the P term nor the integral acts on it
+    float run = fminf(conf->u_run + conf->k_run * fabsf(wheel->setpoint), conf->pwm_max);
     if (wheel->still_ticks >= STALL_TICKS) {
-        wheel->ff = sign * conf->u_breakaway;
-        error     = 0;
+        float kick        = fmaxf(conf->u_breakaway, run);
+        wheel->kick_boost = fminf(wheel->kick_boost, conf->pwm_max - kick);
+        wheel->ff         = sign * (kick + wheel->kick_boost);
+        wheel->kick_boost += conf->kick_ramp;
+        error = 0;
     } else {
-        wheel->ff = sign * (conf->u_run + conf->k_run * fabsf(wheel->setpoint));
+        wheel->kick_boost = 0;
+        wheel->ff         = sign * run;
         // Outside the zone the wheel is still getting up to speed, and what
         // the integral would store there is the overshoot at the end of it
         if (fabsf(error) < conf->i_zone) {

@@ -47,10 +47,10 @@ typedef struct {
 } plant_t;
 
 static void _plant_init(plant_t *p) {
-    p->u_static  = 45.0f;
-    p->u_run     = 26.0f;
-    p->k_run     = 0.055f;
-    p->tau_s     = 0.04f;
+    p->u_static  = 44.0f;
+    p->u_run     = 38.0f;
+    p->k_run     = 0.13f;
+    p->tau_s     = 0.1f;
     p->speed     = 0;
     p->travel_mm = 0;
     p->blocked   = 0;
@@ -86,11 +86,12 @@ static int32_t _plant_step(plant_t *p, int8_t pwm, uint32_t ticks) {
 //=========================== fixtures =========================================
 
 static const db_wheel_control_conf_t _conf = {
-    .kp                = 0.08f,
-    .ki                = 2.0f,
-    .u_breakaway       = 45.0f,
-    .u_run             = 20.0f,
-    .k_run             = 0.055f,
+    .kp                = 0.1f,
+    .ki                = 0.5f,
+    .u_breakaway       = 44.0f,
+    .kick_ramp         = 0.5f,
+    .u_run             = 36.0f,
+    .k_run             = 0.13f,
     .i_zone            = 50.0f,
     .pwm_max           = 75.0f,
     .pwm_slew_per_tick = 20.0f,
@@ -175,10 +176,10 @@ static void test_step_up(void) {
     plant_t            p;
     db_wheel_control_init(&w, &_conf);
     _plant_init(&p);
-    _run(&w, &p, 200, 300);
-    run_t r = _run(&w, &p, 400, 300);
-    CHECK(r.ticks_to_90 > 0 && r.ticks_to_90 <= 20, "200 to 400: 90%% at tick %d, want <= 20", r.ticks_to_90);
-    CHECK(fabsf(r.mean_last_s - 400) <= 20, "200 to 400: steady %.1f, want within 5%%", r.mean_last_s);
+    _run(&w, &p, 150, 300);
+    run_t r = _run(&w, &p, 250, 300);
+    CHECK(r.ticks_to_90 > 0 && r.ticks_to_90 <= 20, "150 to 250: 90%% at tick %d, want <= 20", r.ticks_to_90);
+    CHECK(fabsf(r.mean_last_s - 250) <= 12.5f, "150 to 250: steady %.1f, want within 5%%", r.mean_last_s);
 }
 
 static void test_feedforward_sign(void) {
@@ -186,11 +187,12 @@ static void test_feedforward_sign(void) {
     db_wheel_control_init(&w, &_conf);
     db_wheel_control_set_setpoint(&w, 150);
     int8_t fwd = db_wheel_control_step(&w, 0, 1);
-    CHECK(fwd > 0 && w.ff == _conf.u_breakaway, "a stalled forward step kicks forward, got pwm %d ff %.1f", fwd, w.ff);
+    float kick = fmaxf(_conf.u_breakaway, _conf.u_run + _conf.k_run * 150);
+    CHECK(fwd > 0 && w.ff == kick, "a stalled forward step kicks forward, got pwm %d ff %.1f", fwd, w.ff);
     db_wheel_control_reset(&w);
     db_wheel_control_set_setpoint(&w, -150);
     int8_t back = db_wheel_control_step(&w, 0, 1);
-    CHECK(back < 0 && w.ff == -_conf.u_breakaway, "a stalled backward step kicks backward, got pwm %d ff %.1f", back, w.ff);
+    CHECK(back < 0 && w.ff == -kick, "a stalled backward step kicks backward, got pwm %d ff %.1f", back, w.ff);
     db_wheel_control_step(&w, -3, 1);
     CHECK(fabsf(w.ff + (_conf.u_run + _conf.k_run * 150)) < 1e-4f, "a turning wheel takes the running line, got ff %.2f", w.ff);
 }
@@ -206,7 +208,7 @@ static void test_stop_is_immediate(void) {
     CHECK(pwm == 0 && w.integral == 0, "a zero setpoint stops at once and clears the integral, got pwm %d integral %.2f", pwm, w.integral);
 }
 
-/// Ask for more than the wheel can do, then for something it can: the loop
+/// Ask for slightly more than the wheel can do, then for something it can: the loop
 /// must settle no slower than a P-only loop on the same scenario, which cannot
 /// wind up by construction.
 static int _recovery_ticks(const db_wheel_control_conf_t *conf) {
@@ -214,13 +216,15 @@ static int _recovery_ticks(const db_wheel_control_conf_t *conf) {
     plant_t            p;
     db_wheel_control_init(&w, conf);
     _plant_init(&p);
-    _run(&w, &p, 1500, 300);
-    db_wheel_control_set_setpoint(&w, 300);
+    // Just out of reach: the error stays inside the integral zone while the
+    // output sits at the saturation, which is where an unbounded integral grows
+    _run(&w, &p, 300, 500);
+    db_wheel_control_set_setpoint(&w, 150);
     int8_t pwm = (int8_t)w.pwm;
     for (int t = 0; t < 500; t++) {
         int32_t counts = _plant_step(&p, pwm, 1);
         pwm            = db_wheel_control_step(&w, counts, 1);
-        if (p.speed < 1.2f * 300) {
+        if (p.speed < 1.2f * 150) {
             return t;
         }
     }
@@ -244,7 +248,7 @@ static void test_blocked_wheel_bounded(void) {
     p.blocked = 1;
     run_t r   = _run(&w, &p, 400, 500);
     CHECK(r.max_pwm <= _conf.pwm_max, "a held wheel stays within the saturation, max %d", r.max_pwm);
-    CHECK(w.ff == _conf.u_breakaway, "a held wheel keeps getting the kick, ff %.1f", w.ff);
+    CHECK(w.ff == _conf.pwm_max, "a held wheel's kick ramps up to the saturation, ff %.1f", w.ff);
     CHECK(_conf.ki * w.integral <= _conf.pwm_max - w.ff + 1e-3f, "a held wheel's integral is bounded, holds %.1f duty", _conf.ki * w.integral);
 }
 
@@ -292,10 +296,10 @@ static void test_twist(void) {
 static void test_integral_zone(void) {
     db_wheel_control_t w;
     db_wheel_control_init(&w, &_conf);
-    db_wheel_control_set_setpoint(&w, 400);
-    db_wheel_control_step(&w, 5, 1);
+    db_wheel_control_set_setpoint(&w, 200);
+    db_wheel_control_step(&w, 3, 1);
     CHECK(w.integral == 0, "far below the setpoint the integral holds still, holds %.2f", w.integral);
-    db_wheel_control_step(&w, 38, 1);
+    db_wheel_control_step(&w, 19, 1);
     CHECK(w.integral != 0, "inside the zone the integral accumulates, holds %.2f", w.integral);
 }
 
