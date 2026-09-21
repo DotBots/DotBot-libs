@@ -444,14 +444,15 @@ void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basest
     coordinates[1] = y_position / scale;
 }
 
-void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, int32_t homography_matrix_from_packet[3][3]) {
-    double homography_matrix_temp_storage[3][3] = { 0 };
+void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, float homography_matrix_from_packet[3][3]) {
+    if (basestation_index >= LH2_BASESTATION_COUNT) {
+        return;
+    }
     for (uint8_t i = 0; i < 3; i++) {
         for (uint8_t j = 0; j < 3; j++) {
-            homography_matrix_temp_storage[i][j] = (double)(homography_matrix_from_packet[i][j] / 1e3);
+            homography_matrix[basestation_index][i][j] = (double)homography_matrix_from_packet[i][j];
         }
     }
-    memcpy(homography_matrix[basestation_index], homography_matrix_temp_storage, sizeof(double) * 3 * 3);
 
     lh2->lh2_calibration_complete[basestation_index] = true;
 }
