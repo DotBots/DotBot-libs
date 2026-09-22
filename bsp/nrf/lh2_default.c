@@ -47,6 +47,7 @@
 #define HASH_TABLE_SIZE                        (1 << HASH_TABLE_BITS)                                         ///< How big will the hashtable for the _end_buffers
 #define HASH_TABLE_MASK                        ((1 << HASH_TABLE_BITS) - 1)                                   ///< Mask selecting the HAS_TABLE_BITS least significant bits
 #define NUM_LSFR_COUNT_CHECKPOINTS             64                                                             ///< How many lsfr checkpoints are per polynomial
+#define LH2_PERIOD_TICKS_PER_COUNT             8                                                              ///< ticks of the _periods[] unit per LFSR count, so _periods / this is one rotation in counts
 #define DISTANCE_BETWEEN_LSFR_CHECKPOINTS      2048                                                           ///< How many lsfr checkpoints are per polynomial
 #define CHECKPOINT_TABLE_BITS                  6                                                              ///< How many bits will be used for the checkpoint table for the lfsr search
 #define CHECKPOINT_TABLE_MASK_LOW              ((1 << CHECKPOINT_TABLE_BITS) - 1)                             ///< How big will the checkpoint table for the lfsr search
@@ -410,7 +411,7 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     temp_lfsr_loc -= temp_bit_offset;
 
     // A count past a full rotation, or equal to the other sweep's, comes from a false polynomial match
-    if (temp_lfsr_loc > _periods[basestation] / 8) {
+    if (temp_lfsr_loc > _periods[basestation] / LH2_PERIOD_TICKS_PER_COUNT) {
         lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
         return;
     }
@@ -436,8 +437,8 @@ void db_lh2_process_location(db_lh2_t *lh2) {
 
 void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basestation_index, double *coordinates) {
 
-    double alpha_1 = ((double)(count1) * 8.0 / _periods[basestation_index]) * 2.0 * M_PI;
-    double alpha_2 = ((double)(count2) * 8.0 / _periods[basestation_index]) * 2.0 * M_PI;
+    double alpha_1 = ((double)count1 * LH2_PERIOD_TICKS_PER_COUNT / _periods[basestation_index]) * 2.0 * M_PI;
+    double alpha_2 = ((double)count2 * LH2_PERIOD_TICKS_PER_COUNT / _periods[basestation_index]) * 2.0 * M_PI;
 
     double cam_x = -tan(0.5 * (alpha_1 + alpha_2));
     double cam_y = 0;
