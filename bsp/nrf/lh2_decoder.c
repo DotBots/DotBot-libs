@@ -212,9 +212,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     // finish up demodulation, pick off straggling fuzzies and odd runs of 1s
     ones_counter = 0;
     for (jj = 0; jj < LH2_CHIP_COUNT;) {
-        if (chips1[jj] == 0x00) {                                       // zero, keep going, reset state
-            if (ones_counter % 2 == 1 && jj - ones_counter - 1 >= 0) {  // implies an odd # of 1s
-                chips1[jj - ones_counter - 1] = 1;                      // change the bit before the run of 1s to a 1 to make it even
+        if (chips1[jj] == 0x00) {                   // zero, keep going, reset state
+            if (ones_counter % 2 == 1) {            // implies an odd # of 1s
+                chips1[jj - ones_counter - 1] = 1;  // change the bit before the run of 1s to a 1 to make it even
             }
             jj++;
             ones_counter = 0;
