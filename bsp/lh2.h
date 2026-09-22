@@ -111,7 +111,8 @@ void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basest
  *
  * @param[in] lh2 pointer to the lh2 instance
  * @param[in] basestation_index: index of the basestation that corresponds to the calibration
- * @param[in] homography_matrix_from_packet: the 3x3 homography matrix, in millimetres; ignored if basestation_index is out of range
+ * @param[in] homography_matrix_from_packet: the 3x3 homography matrix, in millimetres; ignored if basestation_index is out of range.
+ *            Must be 4-byte aligned: copy it out of a packed packet first
  *
  */
 void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, float homography_matrix_from_packet[3][3]);
