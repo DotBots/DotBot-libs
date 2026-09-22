@@ -437,8 +437,8 @@ void db_lh2_process_location(db_lh2_t *lh2) {
 
 void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basestation_index, double *coordinates) {
 
-    double alpha_1 = ((double)count1 * LH2_PERIOD_TICKS_PER_COUNT / _periods[basestation_index]) * 2.0 * M_PI;
-    double alpha_2 = ((double)count2 * LH2_PERIOD_TICKS_PER_COUNT / _periods[basestation_index]) * 2.0 * M_PI;
+    double alpha_1 = ((double)(count1) * 8.0 / _periods[basestation_index]) * 2.0 * M_PI;
+    double alpha_2 = ((double)(count2) * 8.0 / _periods[basestation_index]) * 2.0 * M_PI;
 
     double cam_x = -tan(0.5 * (alpha_1 + alpha_2));
     double cam_y = 0;
