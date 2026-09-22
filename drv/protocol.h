@@ -108,6 +108,7 @@ typedef struct __attribute__((packed)) {
     uint8_t basestation_index;        ///< which LH basestation is this homography for?
     float   homography_matrix[3][3];  ///< homography matrix, row-major IEEE-754 float32, in millimetres
 } protocol_lh2_homography_t;
+_Static_assert(sizeof(protocol_lh2_homography_t) == 37, "protocol_lh2_homography_t is a wire format");
 
 /// DotBot protocol GPS coordinates
 typedef struct __attribute__((packed)) {
