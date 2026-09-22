@@ -176,8 +176,8 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 chips1[jj - 1] = 0;
                 ones_counter   = 0;
             }
-            if ((ones_counter % 2 == 0) & (jj + 1 < 128) & (chips1[jj + 1] != 0)) {  // even ones then fuzz then not zero - investigate
-                if (chips1[jj + 1] == 1) {                                           // subsequent bit is a 1
+            if (ones_counter % 2 == 0 && jj + 1 < 128 && chips1[jj + 1] != 0) {  // even ones then fuzz then not zero - investigate
+                if (chips1[jj + 1] == 1) {                                       // subsequent bit is a 1
                     kk = 1;
                     while (jj + kk < 128 && chips1[jj + kk] == 1) {
                         ones_counter++;
@@ -194,12 +194,12 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 } else if (chips1[jj + 1] == FUZZY_CHIP) {  // subsequent bit is a fuzzy - skip for now...
                     jj++;
                 }
-            } else if ((ones_counter % 2 == 1) & (chips1[jj + 1] == FUZZY_CHIP)) {  // odd ones then fuzz then fuzz, fuzz is 1 then 0
+            } else if (ones_counter % 2 == 1 && chips1[jj + 1] == FUZZY_CHIP) {  // odd ones then fuzz then fuzz, fuzz is 1 then 0
                 jj += 2;
                 chips1[jj - 1] = 0;
                 chips1[jj - 2] = 1;
                 ones_counter   = 0;
-            } else if ((ones_counter % 2 == 1) & (chips1[jj + 1] != 0)) {  // odd ones then fuzz then not zero - the fuzzy has to be a 1
+            } else if (ones_counter % 2 == 1 && chips1[jj + 1] != 0) {  // odd ones then fuzz then not zero - the fuzzy has to be a 1
                 jj++;
                 ones_counter++;
                 chips1[jj - 1] = 1;
