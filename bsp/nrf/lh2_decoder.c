@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "lh2.h"
 #include "lh2_decoder.h"
@@ -54,6 +55,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     uint64_t chipsH1 = 0;
 
     // FIND ZERO CROSSINGS
+    // An entry no crossing reaches keeps this count, which thresholds to a
+    // zero chip, so the tail past the last crossing is deterministic.
+    memset(zccs_1, 0xFF, sizeof(zccs_1));
     chip_index         = 0;
     zccs_1[chip_index] = 0x01;
 
@@ -120,6 +124,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
         if (chips1[jj] == 0x00) {  // zero, keep going, reset state
             jj++;
             ones_counter = 0;
+            if (jj >= 128) {
+                break;
+            }
         }
         if (chips1[jj] == 0x01) {  // one, keep going, keep track of the # of ones
                                    // k_msleep(10);
@@ -128,6 +135,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             } else {
                 jj           = jj + 1;
                 ones_counter = ones_counter + 1;
+            }
+            if (jj >= 128) {
+                break;
             }
         }
 
@@ -144,7 +154,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             } else if (chips1[jj + 1] == 1) {  // zero then fuzz then one -> investigate
                 kk           = 1;
                 ones_counter = 0;
-                while (chips1[jj + kk] == 1) {
+                while (jj + kk < 128 && chips1[jj + kk] == 1) {
                     ones_counter++;
                     kk++;
                 }
@@ -166,10 +176,10 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 chips1[jj - 1] = 0;
                 ones_counter   = 0;
             }
-            if ((ones_counter % 2 == 0) & (chips1[jj + 1] != 0)) {  // even ones then fuzz then not zero - investigate
-                if (chips1[jj + 1] == 1) {                          // subsequent bit is a 1
+            if ((ones_counter % 2 == 0) & (jj + 1 < 128) & (chips1[jj + 1] != 0)) {  // even ones then fuzz then not zero - investigate
+                if (chips1[jj + 1] == 1) {                                           // subsequent bit is a 1
                     kk = 1;
-                    while (chips1[jj + kk] == 1) {
+                    while (jj + kk < 128 && chips1[jj + kk] == 1) {
                         ones_counter++;
                         kk++;
                     }
@@ -199,10 +209,11 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
         }
     }
     // finish up demodulation, pick off straggling fuzzies and odd runs of 1s
+    ones_counter = 0;
     for (jj = 0; jj < 128;) {
-        if (chips1[jj] == 0x00) {                   // zero, keep going, reset state
-            if (ones_counter % 2 == 1) {            // implies an odd # of 1s
-                chips1[jj - ones_counter - 1] = 1;  // change the bit before the run of 1s to a 1 to make it even
+        if (chips1[jj] == 0x00) {                                       // zero, keep going, reset state
+            if (ones_counter % 2 == 1 && jj - ones_counter - 1 >= 0) {  // implies an odd # of 1s
+                chips1[jj - ones_counter - 1] = 1;                      // change the bit before the run of 1s to a 1 to make it even
             }
             jj++;
             ones_counter = 0;
@@ -247,7 +258,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     gg         = 0;    // looping/while break indicating variable, reset to 0
     while (gg < 64) {  // very last one - make all remaining fuzzies 0 and load it into two 64-bit longs
         if (chip_index > 127) {
-            gg = 65;  // break
+            break;
         }
         if ((chip_index == 0) & (chips1[chip_index] == 0x01)) {  // first bit is a 1 - ignore it
             chip_index = chip_index + 1;
