@@ -23,6 +23,7 @@
 //=========================== defines =========================================
 
 #define FUZZY_CHIP                             0xFF  ///< not sure what this is about
+#define LH2_CHIP_COUNT                         128   ///< chips demodulated from one capture
 #define POLYNOMIAL_BIT_ERROR_INITIAL_THRESHOLD 0     ///< tolerate no errors in received data
 // #define POLYNOMIAL_BIT_ERROR_INITIAL_THRESHOLD 4                             ///< initial threshold of polynomial error
 #define HASH_TABLE_BITS 6                             ///< How many bits will be used for the hashtable for the _end_buffers
@@ -38,10 +39,10 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     // TODO: make it a void and have chips be a modified pointer thingie
     // FIXME: there is an edge case where I throw away an initial "1" and do not count it in the bit-shift offset, resulting in an incorrect error of 1 in the LFSR location
     uint8_t chip_index;
-    uint8_t zccs_1[256];  // indexed by the uint8_t chip_index, which counts past 128 on a busy capture
-    uint8_t chips1[128];  // TODO: give this a better name.
-    uint8_t temp_byte_N;  // TODO: bad variable name "temp byte"
-    uint8_t temp_byte_M;  // TODO: bad variable name "temp byte"
+    uint8_t zccs_1[UINT8_MAX + 1];
+    uint8_t chips1[LH2_CHIP_COUNT];  // TODO: give this a better name.
+    uint8_t temp_byte_N;             // TODO: bad variable name "temp byte"
+    uint8_t temp_byte_M;             // TODO: bad variable name "temp byte"
 
     // initialize loop variables
     int      jj = 0;
@@ -120,11 +121,11 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     kk           = 0;
     ones_counter = 0;
     jj           = 0;
-    for (jj = 0; jj < 128;) {      // TODO: 128 is such an easy magic number to get rid of...
+    for (jj = 0; jj < LH2_CHIP_COUNT;) {
         if (chips1[jj] == 0x00) {  // zero, keep going, reset state
             jj++;
             ones_counter = 0;
-            if (jj >= 128) {
+            if (jj >= LH2_CHIP_COUNT) {
                 break;
             }
         }
@@ -136,7 +137,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 jj           = jj + 1;
                 ones_counter = ones_counter + 1;
             }
-            if (jj >= 128) {
+            if (jj >= LH2_CHIP_COUNT) {
                 break;
             }
         }
@@ -154,7 +155,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             } else if (chips1[jj + 1] == 1) {  // zero then fuzz then one -> investigate
                 kk           = 1;
                 ones_counter = 0;
-                while (jj + kk < 128 && chips1[jj + kk] == 1) {
+                while (jj + kk < LH2_CHIP_COUNT && chips1[jj + kk] == 1) {
                     ones_counter++;
                     kk++;
                 }
@@ -176,10 +177,10 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 chips1[jj - 1] = 0;
                 ones_counter   = 0;
             }
-            if (ones_counter % 2 == 0 && jj + 1 < 128 && chips1[jj + 1] != 0) {  // even ones then fuzz then not zero - investigate
-                if (chips1[jj + 1] == 1) {                                       // subsequent bit is a 1
+            if (ones_counter % 2 == 0 && jj + 1 < LH2_CHIP_COUNT && chips1[jj + 1] != 0) {  // even ones then fuzz then not zero - investigate
+                if (chips1[jj + 1] == 1) {                                                  // subsequent bit is a 1
                     kk = 1;
-                    while (jj + kk < 128 && chips1[jj + kk] == 1) {
+                    while (jj + kk < LH2_CHIP_COUNT && chips1[jj + kk] == 1) {
                         ones_counter++;
                         kk++;
                     }
@@ -210,7 +211,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     }
     // finish up demodulation, pick off straggling fuzzies and odd runs of 1s
     ones_counter = 0;
-    for (jj = 0; jj < 128;) {
+    for (jj = 0; jj < LH2_CHIP_COUNT;) {
         if (chips1[jj] == 0x00) {                                       // zero, keep going, reset state
             if (ones_counter % 2 == 1 && jj - ones_counter - 1 >= 0) {  // implies an odd # of 1s
                 chips1[jj - ones_counter - 1] = 1;                      // change the bit before the run of 1s to a 1 to make it even
