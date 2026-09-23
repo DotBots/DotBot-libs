@@ -28,22 +28,19 @@
 #include <math.h>
 
 #if defined(BOARD_DOTBOT_V3)
-/// Wheel diameter in mm, caliper-measured on a v3
-#define DB_WHEEL_DIAMETER (44.0f)
+/// Wheel diameter in mm, caliper-measured unloaded on a v3 (2026-09-23)
+#define DB_WHEEL_DIAMETER (43.0f)
 
 /// Distance between the two wheel mid-planes in mm. The caliper reads 77; 78 is
 /// carried here so the C and Python models of the robot agree exactly.
 #define DB_TRACK (78.0f)
 
-/// Quadrature counts per motor shaft revolution.
-///
-/// Bench-measured on a v3 with the 01bsp_qdec example: pushing the robot
-/// through one wheel turn, about 140 mm, read 1400 counts on each wheel
-/// (two runs, 1399/1401 and 1408/1392, both averaging 1400.0). Dividing that
-/// by the 50:1 reduction gives the 28 here. It is also 7 pulses per
-/// revolution decoded x4, which is what the QDEC does, but that pulse count
-/// is inferred from the measurement rather than read from a datasheet.
+/// Nominal quadrature counts per motor shaft revolution: 7 pulses decoded x4
 #define DB_ENCODER_CPR (28.0f)
+
+/// Encoder counts per wheel revolution, hand-turned on a v3 (2026-09-23). Measured,
+/// and about 2% above the nominal DB_ENCODER_CPR * DB_GEAR_RATIO of 1400.
+#define DB_COUNTS_PER_WHEEL_REV (1430.0f)
 
 /// Distance in mm from the wheel-axle midpoint, which is where the robot turns
 /// about, to the lighthouse photodiode. Rotating the robot therefore moves the
@@ -75,7 +72,11 @@
 
 #define DB_GEAR_RATIO (50.0f)  ///< Motor shaft revolutions per wheel revolution
 
+#ifndef DB_COUNTS_PER_WHEEL_REV
+#define DB_COUNTS_PER_WHEEL_REV (DB_ENCODER_CPR * DB_GEAR_RATIO)  ///< Encoder counts per wheel revolution
+#endif
+
 /// mm of wheel travel per encoder count
-#define DB_MM_PER_COUNT (((float)M_PI * DB_WHEEL_DIAMETER) / (DB_ENCODER_CPR * DB_GEAR_RATIO))
+#define DB_MM_PER_COUNT (((float)M_PI * DB_WHEEL_DIAMETER) / DB_COUNTS_PER_WHEEL_REV)
 
 #endif
