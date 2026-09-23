@@ -86,8 +86,8 @@ static int32_t _plant_step(plant_t *p, int8_t pwm, uint32_t ticks) {
 //=========================== fixtures =========================================
 
 static const db_wheel_control_conf_t _conf = {
-    .kp                = 0.1f,
-    .ki                = 0.5f,
+    .kp                = 0.25f,
+    .ki                = 5.0f,
     .u_breakaway       = 44.0f,
     .kick_ramp         = 0.5f,
     .u_run             = 36.0f,
@@ -186,8 +186,8 @@ static void test_feedforward_sign(void) {
     db_wheel_control_t w;
     db_wheel_control_init(&w, &_conf);
     db_wheel_control_set_setpoint(&w, 150);
-    int8_t fwd = db_wheel_control_step(&w, 0, 1);
-    float kick = fmaxf(_conf.u_breakaway, _conf.u_run + _conf.k_run * 150);
+    int8_t fwd  = db_wheel_control_step(&w, 0, 1);
+    float  kick = fmaxf(_conf.u_breakaway, _conf.u_run + _conf.k_run * 150);
     CHECK(fwd > 0 && w.ff == kick, "a stalled forward step kicks forward, got pwm %d ff %.1f", fwd, w.ff);
     db_wheel_control_reset(&w);
     db_wheel_control_set_setpoint(&w, -150);
@@ -300,6 +300,7 @@ static void test_integral_zone(void) {
     db_wheel_control_step(&w, 3, 1);
     CHECK(w.integral == 0, "far below the setpoint the integral holds still, holds %.2f", w.integral);
     db_wheel_control_step(&w, 19, 1);
+    db_wheel_control_step(&w, 19, 1);
     CHECK(w.integral != 0, "inside the zone the integral accumulates, holds %.2f", w.integral);
 }
 
@@ -311,6 +312,26 @@ static void test_sign_change_clears_integral(void) {
     _run(&w, &p, 200, 100);
     db_wheel_control_set_setpoint(&w, -200);
     CHECK(w.integral == 0, "a setpoint sign change clears the integral, holds %.2f", w.integral);
+}
+
+static void test_period_two_rejected(void) {
+    // Counts alternating every step around a steady mean, as a wheel limit
+    // cycling through its gearbox reads: the output must not follow them
+    db_wheel_control_conf_t conf = _conf;
+    conf.ki                      = 0;
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &conf);
+    db_wheel_control_set_setpoint(&w, 24 * DB_MM_PER_COUNT / 0.010f);
+    int8_t pwm   = 0;
+    float  swing = 0;
+    for (int t = 0; t < 60; t++) {
+        int8_t next = db_wheel_control_step(&w, (t % 2) ? 18 : 30, 1);
+        if (t >= 40) {
+            swing += fabsf((float)next - (float)pwm);
+        }
+        pwm = next;
+    }
+    CHECK(swing / 20 <= 1.0f, "counts alternating 30/18: output changes %.1f per step, want <= 1", swing / 20);
 }
 
 int main(void) {
@@ -329,6 +350,7 @@ int main(void) {
     test_twist();
     test_sign_change_clears_integral();
     test_integral_zone();
+    test_period_two_rejected();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

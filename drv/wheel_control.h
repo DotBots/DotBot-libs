@@ -54,6 +54,7 @@ typedef struct {
     float                          integral;     ///< mm, bounded by anti-windup
     float                          pwm;          ///< last output, duty
     float                          measured;     ///< mm/s at the last step, for telemetry
+    float                          previous;     ///< mm/s at the step before
     float                          ff;           ///< feedforward at the last step, duty, for telemetry
     uint32_t                       still_ticks;  ///< consecutive steps without a count, saturating
     float                          kick_boost;   ///< duty the stall ramp has added so far

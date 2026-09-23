@@ -43,6 +43,7 @@ void db_wheel_control_reset(db_wheel_control_t *wheel) {
     wheel->integral    = 0;
     wheel->pwm         = 0;
     wheel->measured    = 0;
+    wheel->previous    = 0;
     wheel->ff          = 0;
     wheel->still_ticks = STALL_TICKS;
     wheel->kick_boost  = 0;
@@ -63,6 +64,7 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
     }
 
     float dt        = (float)elapsed_ticks * (DB_WHEEL_CONTROL_TICK_MS / 1000.0f);
+    wheel->previous = wheel->measured;
     wheel->measured = (float)delta_counts * DB_MM_PER_COUNT / dt;
 
     if (delta_counts != 0) {
@@ -79,8 +81,12 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         return 0;
     }
 
+    // The error takes the mean of the last two speeds: a wheel that answers
+    // within one step otherwise sustains a cycle alternating every step, and
+    // a two-step mean has no gain at that frequency
+    float speed = 0.5f * (wheel->measured + wheel->previous);
     float sign  = (wheel->setpoint > 0) ? 1.0f : -1.0f;
-    float error = wheel->setpoint - wheel->measured;
+    float error = wheel->setpoint - speed;
 
     // A stalled wheel gets the kick alone: its measured speed of zero says
     // nothing about how far the running wheel will be from the setpoint, so
