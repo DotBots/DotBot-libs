@@ -14,6 +14,7 @@
  * @}
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <nrf.h>
 
@@ -59,5 +60,18 @@ void db_motors_coast(void);
  *  Released by any subsequent db_motors_set_pwm() call.
  */
 void db_motors_brake(void);
+
+/**
+ * @brief Set the duty of each motor, or brake it
+ *
+ *  As db_motors_set_pwm(), except that a motor whose brake flag is set is
+ *  braked as db_motors_brake() does, and its duty is ignored.
+ *
+ * @param[in] l_pwm   duty of the left motor [-100, 100]
+ * @param[in] r_pwm   duty of the right motor [-100, 100]
+ * @param[in] l_brake brake the left motor instead
+ * @param[in] r_brake brake the right motor instead
+ */
+void db_motors_set_pwm_brake(int16_t l_pwm, int16_t r_pwm, bool l_brake, bool r_brake);
 
 #endif
