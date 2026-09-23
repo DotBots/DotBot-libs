@@ -38,9 +38,8 @@
 /// Nominal quadrature counts per motor shaft revolution: 7 pulses decoded x4
 #define DB_ENCODER_CPR (28.0f)
 
-/// Encoder counts per wheel revolution, hand-turned on a v3 (2026-09-23). Measured,
-/// and about 2% above the nominal DB_ENCODER_CPR * DB_GEAR_RATIO of 1400.
-#define DB_COUNTS_PER_WHEEL_REV (1430.0f)
+/// Hand-counted, and confirmed by 1430 +/- 1.5 encoder counts per wheel turn; sold as 50:1
+#define DB_GEAR_RATIO (51.0f)
 
 /// Distance in mm from the wheel-axle midpoint, which is where the robot turns
 /// about, to the lighthouse photodiode. Rotating the robot therefore moves the
@@ -66,17 +65,12 @@
 #define DB_WHEEL_DIAMETER  (40.0f)  ///< Wheel diameter in mm
 #define DB_TRACK           (90.0f)  ///< Distance between the two wheel mid-planes in mm
 #define DB_ENCODER_CPR     (12.0f)  ///< Quadrature counts per motor shaft revolution
+#define DB_GEAR_RATIO      (50.0f)  ///< Motor shaft revolutions per wheel revolution
 #define DB_LH2_LEVER_ARM   (0.0f)   ///< Axle midpoint to photodiode, in mm
 #define DB_LH2_LEVER_ANGLE (0.0f)   ///< Direction of that offset, degrees clockwise from forward
 #endif
 
-#define DB_GEAR_RATIO (50.0f)  ///< Motor shaft revolutions per wheel revolution
-
-#ifndef DB_COUNTS_PER_WHEEL_REV
-#define DB_COUNTS_PER_WHEEL_REV (DB_ENCODER_CPR * DB_GEAR_RATIO)  ///< Encoder counts per wheel revolution
-#endif
-
 /// mm of wheel travel per encoder count
-#define DB_MM_PER_COUNT (((float)M_PI * DB_WHEEL_DIAMETER) / DB_COUNTS_PER_WHEEL_REV)
+#define DB_MM_PER_COUNT (((float)M_PI * DB_WHEEL_DIAMETER) / (DB_ENCODER_CPR * DB_GEAR_RATIO))
 
 #endif

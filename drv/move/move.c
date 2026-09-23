@@ -103,7 +103,7 @@ void db_move_straight(uint16_t distance, int8_t speed) {
     int16_t prev_left_count  = 0;
     int16_t prev_right_count = 0;
     int16_t left_diff, right_diff;
-    float   counts_per_rev      = DB_COUNTS_PER_WHEEL_REV;
+    float   counts_per_rev      = DB_ENCODER_CPR * DB_GEAR_RATIO;
     float   wheel_diameter      = DB_WHEEL_DIAMETER;
     float   wheel_circumference = M_PI * wheel_diameter;
     float   rev_count           = expected_distance / wheel_circumference;
@@ -160,7 +160,7 @@ void db_move_rotate(uint16_t angle, int8_t speed) {
     int16_t prev_left_count  = 0;
     int16_t prev_right_count = 0;
     int16_t left_diff, right_diff;
-    float   counts_per_rev      = DB_COUNTS_PER_WHEEL_REV;
+    float   counts_per_rev      = DB_ENCODER_CPR * DB_GEAR_RATIO;
     float   wheel_diameter      = DB_WHEEL_DIAMETER;
     float   wheel_circumference = M_PI * wheel_diameter;
     float   rev_count           = expected_distance / wheel_circumference;
