@@ -56,6 +56,20 @@
 /// because the photodiode sits on the centreline.
 #define DB_LH2_LEVER_ANGLE (0.0f)
 
+/// Track in mm that odometry and the twist mixer divide by: the rotation the
+/// robot actually makes on carpet for a given wheel travel difference. Tyre
+/// scrub puts it above DB_TRACK, and more so the faster it turns; this is the
+/// value for spins at up to about 150 mm/s per wheel.
+/// TODO: provisional. Spins against LH2 read 80 to 82 mm up to that speed,
+/// rising to 87 and beyond faster, and arcs about 85; replace with the floor fit.
+#define DB_TRACK_EFFECTIVE (81.0f)
+
+/// Lever arm in mm fitted to the LH2 fixes of spins in place: 52.0 mm
+/// clockwise and 51.3 mm counter-clockwise, 52 +/- 2 with the LH2 scale
+/// error. The estimator uses this one; DB_LH2_LEVER_ARM stays the board
+/// figure, which is 2 mm longer.
+#define DB_LH2_LEVER_ARM_EFFECTIVE (51.5f)
+
 // DotBot v1 and v2, none of whose dimensions have been measured. These are the
 // values both drivers carried before the v3 bench run, kept so those boards
 // behave exactly as they did. A zero lever arm is what the drivers assumed:
@@ -68,6 +82,8 @@
 #define DB_GEAR_RATIO      (50.0f)  ///< Motor shaft revolutions per wheel revolution
 #define DB_LH2_LEVER_ARM   (0.0f)   ///< Axle midpoint to photodiode, in mm
 #define DB_LH2_LEVER_ANGLE (0.0f)   ///< Direction of that offset, degrees clockwise from forward
+#define DB_TRACK_EFFECTIVE         DB_TRACK          ///< Track odometry divides by, in mm
+#define DB_LH2_LEVER_ARM_EFFECTIVE DB_LH2_LEVER_ARM  ///< Lever arm the estimator uses, in mm
 #endif
 
 /// mm of wheel travel per encoder count
