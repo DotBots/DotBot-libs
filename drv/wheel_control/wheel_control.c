@@ -88,16 +88,16 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
     float sign  = (wheel->setpoint > 0) ? 1.0f : -1.0f;
     float error = wheel->setpoint - speed;
 
-    // A stalled wheel gets the kick alone: its measured speed of zero says
-    // nothing about how far the running wheel will be from the setpoint, so
-    // neither the P term nor the integral acts on it
+    // A stalled wheel gets the kick, and the P term on the whole setpoint so a
+    // step from rest starts with the push the running wheel will need; the
+    // integral stays out of it
     float run = fminf(conf->u_run + conf->k_run * fabsf(wheel->setpoint), conf->pwm_max);
     if (wheel->still_ticks >= STALL_TICKS) {
         float kick        = fmaxf(conf->u_breakaway, run);
         wheel->kick_boost = fminf(wheel->kick_boost, conf->pwm_max - kick);
         wheel->ff         = sign * (kick + wheel->kick_boost);
         wheel->kick_boost += conf->kick_ramp;
-        error = 0;
+        error = wheel->setpoint;
     } else {
         wheel->kick_boost = 0;
         wheel->ff         = sign * run;

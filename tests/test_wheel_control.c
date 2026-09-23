@@ -86,7 +86,7 @@ static int32_t _plant_step(plant_t *p, int8_t pwm, uint32_t ticks) {
 //=========================== fixtures =========================================
 
 static const db_wheel_control_conf_t _conf = {
-    .kp                = 0.25f,
+    .kp                = 0.5f,
     .ki                = 5.0f,
     .u_breakaway       = 44.0f,
     .kick_ramp         = 0.5f,
@@ -334,6 +334,18 @@ static void test_period_two_rejected(void) {
     CHECK(swing / 20 <= 1.0f, "counts alternating 30/18: output changes %.1f per step, want <= 1", swing / 20);
 }
 
+static void test_stall_start_pushes(void) {
+    // A wheel still at rest takes the P term on the whole setpoint, not the kick alone
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, 150);
+    int8_t pwm = 0;
+    for (int t = 0; t < 5; t++) {
+        pwm = db_wheel_control_step(&w, 0, 1);
+    }
+    CHECK(pwm == _conf.pwm_max, "a stalled step from rest pushes to the saturation, got %d, kick %.1f", pwm, w.ff);
+}
+
 int main(void) {
     test_zero_setpoint_no_creep();
     test_step_from_rest(200);
@@ -351,6 +363,7 @@ int main(void) {
     test_sign_change_clears_integral();
     test_integral_zone();
     test_period_two_rejected();
+    test_stall_start_pushes();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
