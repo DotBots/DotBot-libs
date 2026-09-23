@@ -43,7 +43,9 @@ typedef struct {
     float tau_s;      ///< speed lag
     float speed;      ///< mm/s
     float travel_mm;  ///< mm not yet turned into whole counts
+    float tau_brake;  ///< speed lag with the motor shorted
     int   blocked;    ///< wheel held still
+    int   brake;      ///< motor shorted, duty ignored
 } plant_t;
 
 static void _plant_init(plant_t *p) {
@@ -51,9 +53,11 @@ static void _plant_init(plant_t *p) {
     p->u_run     = 38.0f;
     p->k_run     = 0.13f;
     p->tau_s     = 0.1f;
+    p->tau_brake = 0.02f;
     p->speed     = 0;
     p->travel_mm = 0;
     p->blocked   = 0;
+    p->brake     = 0;
 }
 
 /// Advance one 10 ms tick under a duty, return the whole counts produced
@@ -64,6 +68,14 @@ static int32_t _plant_step(plant_t *p, int8_t pwm, uint32_t ticks) {
         float u      = fabsf((float)pwm);
         if (p->blocked) {
             p->speed = 0;
+            continue;
+        }
+        if (p->brake) {
+            p->speed -= p->speed * dt / p->tau_brake;
+            if (fabsf(p->speed) < 1.0f) {
+                p->speed = 0;
+            }
+            p->travel_mm += p->speed * dt;
             continue;
         }
         if (p->speed == 0 && u < p->u_static) {
@@ -206,6 +218,37 @@ static void test_stop_is_immediate(void) {
     db_wheel_control_set_setpoint(&w, 0);
     int8_t pwm = db_wheel_control_step(&w, 5, 1);
     CHECK(pwm == 0 && w.integral == 0, "a zero setpoint stops at once and clears the integral, got pwm %d integral %.2f", pwm, w.integral);
+}
+
+static void test_stop_brakes_then_releases(void) {
+    db_wheel_control_t w;
+    plant_t            p;
+    db_wheel_control_init(&w, &_conf);
+    _plant_init(&p);
+    _run(&w, &p, 150, 200);
+    db_wheel_control_set_setpoint(&w, 0);
+    int8_t pwm      = (int8_t)w.pwm;
+    int    released = -1;
+    for (int t = 0; t < 100 && released < 0; t++) {
+        p.brake        = w.brake;
+        int32_t counts = _plant_step(&p, pwm, 1);
+        pwm            = db_wheel_control_step(&w, counts, 1);
+        if (t == 0) {
+            CHECK(w.brake && pwm == 0, "a stop from 150 mm/s brakes, got brake %d duty %d", w.brake, pwm);
+            CHECK(w.integral == 0 && w.kick_boost == 0, "a stop clears the integral and the kick, holds %.2f and %.2f", w.integral, w.kick_boost);
+        }
+        if (!w.brake) {
+            released = t;
+        }
+    }
+    CHECK(released > 0 && p.speed == 0, "the brake releases once the wheel stands, at tick %d with speed %.1f", released, p.speed);
+    db_wheel_control_step(&w, 0, 1);
+    CHECK(!w.brake, "a standing wheel stays released");
+    db_wheel_control_step(&w, 3, 1);
+    CHECK(w.brake, "a stopped wheel that is pushed brakes again");
+    db_wheel_control_set_setpoint(&w, 150);
+    pwm = db_wheel_control_step(&w, 0, 1);
+    CHECK(!w.brake && pwm > 0, "a new setpoint drives again, got brake %d duty %d", w.brake, pwm);
 }
 
 /// Ask for slightly more than the wheel can do, then for something it can: the loop
@@ -386,6 +429,7 @@ int main(void) {
     test_step_up();
     test_feedforward_sign();
     test_stop_is_immediate();
+    test_stop_brakes_then_releases();
     test_no_windup();
     test_blocked_wheel_bounded();
     test_reversal();

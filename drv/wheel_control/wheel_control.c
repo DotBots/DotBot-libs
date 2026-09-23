@@ -47,6 +47,7 @@ void db_wheel_control_reset(db_wheel_control_t *wheel) {
     wheel->ff          = 0;
     wheel->still_ticks = STALL_TICKS;
     wheel->kick_boost  = 0;
+    wheel->brake       = false;
 }
 
 void db_wheel_control_set_setpoint(db_wheel_control_t *wheel, float mm_per_s) {
@@ -73,6 +74,9 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         wheel->still_ticks++;
     }
 
+    // A zero setpoint shorts the motor only while the wheel turns: once it has
+    // stopped it coasts, and a wheel pushed afterwards brakes again
+    wheel->brake = (wheel->setpoint == 0) && (wheel->still_ticks < STALL_TICKS);
     if (wheel->setpoint == 0) {
         wheel->kick_boost = 0;
         wheel->integral   = 0;
@@ -118,8 +122,8 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
 
     float pwm = wheel->ff + conf->kp * error + conf->ki * wheel->integral;
     // Below u_run the motor does not drive and a turning wheel only coasts, so
-    // a wheel well over its setpoint has a command short of it moved past it
-    // and brakes. Nearer the setpoint it coasts, or a wheel the body carries
+    // a wheel well over its setpoint has a command short of it moved past it,
+    // driving against its motion. Nearer the setpoint it coasts, or a wheel the body carries
     // would flip between braking and driving on every step
     if (wheel->still_ticks < STALL_TICKS && sign * pwm < conf->u_run && sign * error < -conf->i_zone) {
         pwm -= sign * conf->u_run;

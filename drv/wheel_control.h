@@ -18,8 +18,11 @@
  * it came to rest. The PI trims around that
  * feedforward. On a turning wheel more than i_zone over its setpoint, a
  * command that comes out below u_run is moved past it, since there the motor
- * does not drive and the wheel would only coast. A zero setpoint outputs zero duty and clears the integral, so a
- * stopped wheel never creeps.
+ * does not drive and the wheel would only coast. A zero setpoint outputs zero
+ * duty and clears the integral and the kick, so a stopped wheel never creeps,
+ * and sets the wheel's brake flag while the wheel still turns: the app shorts
+ * that motor until the wheel has gone a stall's worth of steps without a
+ * count, then lets it coast.
  *
  * No hardware calls, so the module also builds on the host for its tests.
  *
@@ -29,6 +32,7 @@
  * @}
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 
 //=========================== defines ==========================================
@@ -60,6 +64,7 @@ typedef struct {
     float                          ff;           ///< feedforward at the last step, duty, for telemetry
     uint32_t                       still_ticks;  ///< consecutive steps without a count, saturating
     float                          kick_boost;   ///< duty the stall ramp has added so far
+    bool                           brake;        ///< short the motor instead of applying the duty
 } db_wheel_control_t;
 
 /// Body motion, the input of the twist mixer
@@ -102,7 +107,7 @@ void db_wheel_control_reset(db_wheel_control_t *wheel);
  * @param[in]   delta_counts    Encoder counts since the previous step, signed
  * @param[in]   elapsed_ticks   Ticks since the previous step, normally 1; 0 returns the previous output
  *
- * @return  motor duty in [-pwm_max, pwm_max]
+ * @return  motor duty in [-pwm_max, pwm_max], ignored while wheel->brake is set
  */
 int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, uint32_t elapsed_ticks);
 
