@@ -346,6 +346,38 @@ static void test_stall_start_pushes(void) {
     CHECK(pwm == _conf.pwm_max, "a stalled step from rest pushes to the saturation, got %d, kick %.1f", pwm, w.ff);
 }
 
+static void test_brakes_through_dead_zone(void) {
+    // Over its setpoint by less than the feedforward, a wheel would get a duty
+    // between 0 and u_run, where it only coasts: it must be driven backward instead
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, 300);
+    int32_t counts = (int32_t)roundf(300 * 0.010f / DB_MM_PER_COUNT);
+    for (int t = 0; t < 50; t++) {
+        db_wheel_control_step(&w, counts, 1);
+    }
+    db_wheel_control_set_setpoint(&w, 200);
+    int8_t pwm = 0;
+    for (int t = 0; t < 10; t++) {
+        pwm = db_wheel_control_step(&w, counts, 1);
+    }
+    CHECK(pwm <= -_conf.u_run / 2, "a wheel 100 mm/s over its setpoint brakes, got duty %d", pwm);
+}
+
+static void test_coasts_near_setpoint(void) {
+    // Slightly over a slow setpoint the command falls inside the dead zone; it
+    // must not be turned into braking, or a wheel the body carries chatters
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, 30);
+    int32_t counts = (int32_t)roundf(50 * 0.010f / DB_MM_PER_COUNT);
+    int8_t  pwm    = 0;
+    for (int t = 0; t < 3; t++) {
+        pwm = db_wheel_control_step(&w, counts, 1);
+    }
+    CHECK(pwm >= 0, "20 mm/s over a 30 mm/s setpoint coasts rather than brakes, got duty %d", pwm);
+}
+
 int main(void) {
     test_zero_setpoint_no_creep();
     test_step_from_rest(200);
@@ -364,6 +396,8 @@ int main(void) {
     test_integral_zone();
     test_period_two_rejected();
     test_stall_start_pushes();
+    test_brakes_through_dead_zone();
+    test_coasts_near_setpoint();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

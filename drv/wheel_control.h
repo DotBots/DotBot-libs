@@ -16,7 +16,9 @@
  * (no counts for a few steps) a kick of at least u_breakaway that ramps up
  * until the wheel moves, since the duty that frees a wheel changes with where
  * it came to rest. The PI trims around that
- * feedforward. A zero setpoint outputs zero duty and clears the integral, so a
+ * feedforward. On a turning wheel more than i_zone over its setpoint, a
+ * command that comes out below u_run is moved past it, since there the motor
+ * does not drive and the wheel would only coast. A zero setpoint outputs zero duty and clears the integral, so a
  * stopped wheel never creeps.
  *
  * No hardware calls, so the module also builds on the host for its tests.

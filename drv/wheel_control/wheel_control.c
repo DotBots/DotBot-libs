@@ -116,7 +116,14 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         wheel->integral = 0;
     }
 
-    float pwm  = wheel->ff + conf->kp * error + conf->ki * wheel->integral;
+    float pwm = wheel->ff + conf->kp * error + conf->ki * wheel->integral;
+    // Below u_run the motor does not drive and a turning wheel only coasts, so
+    // a wheel well over its setpoint has a command short of it moved past it
+    // and brakes. Nearer the setpoint it coasts, or a wheel the body carries
+    // would flip between braking and driving on every step
+    if (wheel->still_ticks < STALL_TICKS && sign * pwm < conf->u_run && sign * error < -conf->i_zone) {
+        pwm -= sign * conf->u_run;
+    }
     pwm        = _clamp(pwm, -conf->pwm_max, conf->pwm_max);
     pwm        = _clamp(pwm, wheel->pwm - conf->pwm_slew_per_tick, wheel->pwm + conf->pwm_slew_per_tick);
     wheel->pwm = roundf(pwm);
