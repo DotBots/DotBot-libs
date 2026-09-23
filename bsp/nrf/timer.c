@@ -21,6 +21,8 @@
 
 #define TIMER_MAX_CHANNELS (4U)
 #define TIMER_IRQ_PRIORITY (3U)
+#define TIMER_COUNTER_MASK (0x00FFFFFFUL)  ///< RTC COUNTER and CC are 24 bits
+#define TIMER_REARM_MARGIN (4U)            ///< the RTC matches only CC >= COUNTER + 2 at write time; 2 more for ticks during the ISR
 
 typedef struct {
     NRF_RTC_Type *p;
@@ -196,7 +198,16 @@ static void _timer_isr(timer_t timer) {
             if (_timer_vars[timer].timer_callback[channel].one_shot) {
                 _devs[timer].p->INTENCLR = (1 << (RTC_INTENCLR_COMPARE0_Pos + channel));
             } else {
-                _devs[timer].p->CC[channel] += _timer_vars[timer].timer_callback[channel].period_ticks;
+                uint32_t period = _timer_vars[timer].timer_callback[channel].period_ticks;
+                uint32_t next   = (_devs[timer].p->CC[channel] + period) & TIMER_COUNTER_MASK;
+                uint32_t ahead  = (next - _devs[timer].p->COUNTER) & TIMER_COUNTER_MASK;
+                // Serviced more than a period late: a compare value the counter has
+                // already passed would not match again until the 24-bit wrap (512 s).
+                if (ahead > period || ahead < TIMER_REARM_MARGIN) {
+                    uint32_t delay = (period < TIMER_REARM_MARGIN) ? TIMER_REARM_MARGIN : period;
+                    next           = (_devs[timer].p->COUNTER + delay) & TIMER_COUNTER_MASK;
+                }
+                _devs[timer].p->CC[channel] = next;
             }
             if (_timer_vars[timer].timer_callback[channel].callback) {
                 _timer_vars[timer].timer_callback[channel].callback();

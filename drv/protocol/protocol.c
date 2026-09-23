@@ -61,7 +61,7 @@ size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, applic
     return header_length + sizeof(uint8_t) + sizeof(uint8_t);
 }
 
-size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, bool calibrated) {
+size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, uint8_t calibrated) {
     size_t header_length                        = db_frame_header_to_buffer(buffer, dst);
     *(buffer + header_length)                   = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
     *(buffer + header_length + sizeof(uint8_t)) = calibrated;

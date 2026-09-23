@@ -47,6 +47,7 @@
 #define HASH_TABLE_SIZE                        (1 << HASH_TABLE_BITS)                                         ///< How big will the hashtable for the _end_buffers
 #define HASH_TABLE_MASK                        ((1 << HASH_TABLE_BITS) - 1)                                   ///< Mask selecting the HAS_TABLE_BITS least significant bits
 #define NUM_LSFR_COUNT_CHECKPOINTS             64                                                             ///< How many lsfr checkpoints are per polynomial
+#define LH2_PERIOD_TICKS_PER_COUNT             8                                                              ///< ticks of the _periods[] unit per LFSR count, so _periods / this is one rotation in counts
 #define DISTANCE_BETWEEN_LSFR_CHECKPOINTS      2048                                                           ///< How many lsfr checkpoints are per polynomial
 #define CHECKPOINT_TABLE_BITS                  6                                                              ///< How many bits will be used for the checkpoint table for the lfsr search
 #define CHECKPOINT_TABLE_MASK_LOW              ((1 << CHECKPOINT_TABLE_BITS) - 1)                             ///< How big will the checkpoint table for the lfsr search
@@ -409,6 +410,18 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     // Undo the bit offset introduced above, to get the LFSR position of the first bit that hit the sensor.
     temp_lfsr_loc -= temp_bit_offset;
 
+    // A count past a full rotation, or equal to the other sweep's, comes from a false polynomial match
+    if (temp_lfsr_loc > _periods[basestation] / LH2_PERIOD_TICKS_PER_COUNT) {
+        lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
+        return;
+    }
+    uint8_t other_sweep = sweep ^ 1;
+    if (lh2->data_ready[other_sweep][basestation] == DB_LH2_PROCESSED_DATA_AVAILABLE && lh2->locations[other_sweep][basestation].lfsr_counts == temp_lfsr_loc) {
+        lh2->data_ready[sweep][basestation]       = DB_LH2_NO_NEW_DATA;
+        lh2->data_ready[other_sweep][basestation] = DB_LH2_NO_NEW_DATA;
+        return;
+    }
+
     //*********************************************************************************//
     //                                 Store results                                   //
     //*********************************************************************************//
@@ -444,14 +457,15 @@ void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basest
     coordinates[1] = y_position / scale;
 }
 
-void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, int32_t homography_matrix_from_packet[3][3]) {
-    double homography_matrix_temp_storage[3][3] = { 0 };
+void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, float homography_matrix_from_packet[3][3]) {
+    if (basestation_index >= LH2_BASESTATION_COUNT) {
+        return;
+    }
     for (uint8_t i = 0; i < 3; i++) {
         for (uint8_t j = 0; j < 3; j++) {
-            homography_matrix_temp_storage[i][j] = (double)(homography_matrix_from_packet[i][j] / 1e3);
+            homography_matrix[basestation_index][i][j] = (double)homography_matrix_from_packet[i][j];
         }
     }
-    memcpy(homography_matrix[basestation_index], homography_matrix_temp_storage, sizeof(double) * 3 * 3);
 
     lh2->lh2_calibration_complete[basestation_index] = true;
 }

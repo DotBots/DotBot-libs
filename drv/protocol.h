@@ -106,8 +106,9 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t basestation_index;        ///< which LH basestation is this homography for?
-    int32_t homography_matrix[3][3];  ///< homography matrix, each element multiplied by 1e3
+    float   homography_matrix[3][3];  ///< homography matrix, row-major IEEE-754 float32, in millimetres
 } protocol_lh2_homography_t;
+_Static_assert(sizeof(protocol_lh2_homography_t) == 37, "protocol_lh2_homography_t is a wire format");
 
 /// DotBot protocol GPS coordinates
 typedef struct __attribute__((packed)) {
@@ -203,11 +204,11 @@ size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, applic
  *
  * @param[out]  buffer      Bytes array to write to
  * @param[in]   dst         Destination address written in the header
- * @param[in]   calibrated  Whether the device LH2 is calibrated (true) or not (false)
+ * @param[in]   calibrated  Bitmask of the LH2 basestations with a stored homography (bit n = basestation n)
  *
  * @return                  Number of bytes written in the buffer
  */
-size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, bool calibrated);
+size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, uint8_t calibrated);
 
 /**
  * @brief   Write a move raw command in a buffer

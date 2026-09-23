@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "lh2.h"
 #include "lh2_decoder.h"
@@ -37,7 +38,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     // TODO: make it a void and have chips be a modified pointer thingie
     // FIXME: there is an edge case where I throw away an initial "1" and do not count it in the bit-shift offset, resulting in an incorrect error of 1 in the LFSR location
     uint8_t chip_index;
-    uint8_t zccs_1[128];
+    uint8_t zccs_1[256];  // indexed by the uint8_t chip_index, which counts past 128 on a busy capture
     uint8_t chips1[128];  // TODO: give this a better name.
     uint8_t temp_byte_N;  // TODO: bad variable name "temp byte"
     uint8_t temp_byte_M;  // TODO: bad variable name "temp byte"
@@ -54,6 +55,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     uint64_t chipsH1 = 0;
 
     // FIND ZERO CROSSINGS
+    // An entry no crossing reaches keeps this count, which thresholds to a
+    // zero chip, so the tail past the last crossing is deterministic.
+    memset(zccs_1, 0xFF, sizeof(zccs_1));
     chip_index         = 0;
     zccs_1[chip_index] = 0x01;
 
@@ -120,6 +124,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
         if (chips1[jj] == 0x00) {  // zero, keep going, reset state
             jj++;
             ones_counter = 0;
+            if (jj >= 128) {
+                break;
+            }
         }
         if (chips1[jj] == 0x01) {  // one, keep going, keep track of the # of ones
                                    // k_msleep(10);
@@ -128,6 +135,9 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             } else {
                 jj           = jj + 1;
                 ones_counter = ones_counter + 1;
+            }
+            if (jj >= 128) {
+                break;
             }
         }
 
@@ -144,7 +154,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
             } else if (chips1[jj + 1] == 1) {  // zero then fuzz then one -> investigate
                 kk           = 1;
                 ones_counter = 0;
-                while (chips1[jj + kk] == 1) {
+                while (jj + kk < 128 && chips1[jj + kk] == 1) {
                     ones_counter++;
                     kk++;
                 }
@@ -166,10 +176,10 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 chips1[jj - 1] = 0;
                 ones_counter   = 0;
             }
-            if ((ones_counter % 2 == 0) & (chips1[jj + 1] != 0)) {  // even ones then fuzz then not zero - investigate
-                if (chips1[jj + 1] == 1) {                          // subsequent bit is a 1
+            if ((ones_counter % 2 == 0) && (jj + 1 < 128) && (chips1[jj + 1] != 0)) {  // even ones then fuzz then not zero - investigate
+                if (chips1[jj + 1] == 1) {                                             // subsequent bit is a 1
                     kk = 1;
-                    while (chips1[jj + kk] == 1) {
+                    while (jj + kk < 128 && chips1[jj + kk] == 1) {
                         ones_counter++;
                         kk++;
                     }
@@ -184,12 +194,12 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
                 } else if (chips1[jj + 1] == FUZZY_CHIP) {  // subsequent bit is a fuzzy - skip for now...
                     jj++;
                 }
-            } else if ((ones_counter % 2 == 1) & (chips1[jj + 1] == FUZZY_CHIP)) {  // odd ones then fuzz then fuzz, fuzz is 1 then 0
+            } else if ((ones_counter % 2 == 1) && (chips1[jj + 1] == FUZZY_CHIP)) {  // odd ones then fuzz then fuzz, fuzz is 1 then 0
                 jj += 2;
                 chips1[jj - 1] = 0;
                 chips1[jj - 2] = 1;
                 ones_counter   = 0;
-            } else if ((ones_counter % 2 == 1) & (chips1[jj + 1] != 0)) {  // odd ones then fuzz then not zero - the fuzzy has to be a 1
+            } else if ((ones_counter % 2 == 1) && (chips1[jj + 1] != 0)) {  // odd ones then fuzz then not zero - the fuzzy has to be a 1
                 jj++;
                 ones_counter++;
                 chips1[jj - 1] = 1;
@@ -199,6 +209,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
         }
     }
     // finish up demodulation, pick off straggling fuzzies and odd runs of 1s
+    ones_counter = 0;
     for (jj = 0; jj < 128;) {
         if (chips1[jj] == 0x00) {                   // zero, keep going, reset state
             if (ones_counter % 2 == 1) {            // implies an odd # of 1s
@@ -247,7 +258,7 @@ uint64_t _demodulate_light(uint8_t *sample_buffer) {  // bad input variable name
     gg         = 0;    // looping/while break indicating variable, reset to 0
     while (gg < 64) {  // very last one - make all remaining fuzzies 0 and load it into two 64-bit longs
         if (chip_index > 127) {
-            gg = 65;  // break
+            break;
         }
         if ((chip_index == 0) & (chips1[chip_index] == 0x01)) {  // first bit is a 1 - ignore it
             chip_index = chip_index + 1;
@@ -354,7 +365,7 @@ uint8_t _determine_polynomial(uint64_t chipsH1, int8_t *start_val) {
         // Check against all the known polynomials
         for (uint8_t i = 0; i < LH2_POLYNOMIAL_COUNT; i++) {
             bits_from_poly[i] = (((_poly_check(_polynomials[i], bit_buffer1, bits_N_for_comp)) << (64 - 17 - (*start_val) - bits_N_for_comp)) | (chipsH1 & (0xFFFFFFFFFFFFFFFF << (64 - (*start_val)))));
-            weights[i]        = __builtin_popcount(bits_from_poly[i] ^ bits_to_compare);
+            weights[i]        = __builtin_popcountll(bits_from_poly[i] ^ bits_to_compare);
             // Keep track of the minimum weight value and which polinimial generated it.
             if (weights[i] < min_weight) {
                 min_weight_idx = i;
