@@ -130,7 +130,7 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
 int32_t db_wheel_control_counts(int32_t acc, uint32_t dbl);
 
 /**
- * @brief   Wheel speeds for a body twist, over the track DB_TRACK_EFFECTIVE
+ * @brief   Wheel speeds for a body twist, over the effective track for its turn radius
  *
  * Clockwise turns speed the left wheel up: v_left = v + w L/2, v_right = v - w L/2.
  *
