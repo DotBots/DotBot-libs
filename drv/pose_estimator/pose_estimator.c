@@ -38,6 +38,10 @@ static void _lever(const db_pose_estimator_conf_t *conf, float theta, float *lx,
     *ly     = conf->lever_mm * cosf(a);
 }
 
+static void _travel_clear(db_pose_estimator_t *est) {
+    memset(&est->travel, 0, sizeof(est->travel));
+}
+
 static void _chain_start(db_pose_estimator_t *est, float x_mm, float y_mm) {
     est->chain_x         = x_mm;
     est->chain_y         = y_mm;
@@ -109,14 +113,23 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     est->status   = DB_POSE_ESTIMATOR_TRACKING;
     est->chain_count        = 0;
     est->ticks_since_accept = 0;
+    _travel_clear(est);
     est->seeds++;
     return DB_POSE_ESTIMATOR_SEEDED;
 }
 
-/// Gated EKF update with h(x) = axle + lever(theta)
+/// Gated EKF update with h(x) = axle + lever(theta), on the fix moved forward
+/// by the photodiode travel since it was captured
 static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float x_mm, float y_mm) {
     const db_pose_estimator_conf_t *conf = est->conf;
     float (*P)[3]                        = est->P;
+
+    uint32_t age = (conf->fix_age_ticks < DB_POSE_ESTIMATOR_FIX_AGE_MAX) ? conf->fix_age_ticks : DB_POSE_ESTIMATOR_FIX_AGE_MAX;
+    for (uint32_t i = 1; i <= age; i++) {
+        uint32_t slot = (est->travel.head + DB_POSE_ESTIMATOR_FIX_AGE_MAX - i) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
+        x_mm += est->travel.x[slot];
+        y_mm += est->travel.y[slot];
+    }
 
     float lx, ly;
     _lever(conf, est->theta, &lx, &ly);
@@ -194,6 +207,7 @@ void db_pose_estimator_seed(db_pose_estimator_t *est, float x_mm, float y_mm, fl
     est->status             = DB_POSE_ESTIMATOR_TRACKING;
     est->chain_count        = 0;
     est->ticks_since_accept = 0;
+    _travel_clear(est);
 }
 
 void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, int32_t counts_right, uint32_t elapsed_ticks) {
@@ -214,7 +228,7 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
     float d_right = (float)counts_right * DB_MM_PER_COUNT;
     float d       = 0.5f * (d_left + d_right);
     float dd      = fabsf(d_right - d_left);
-    float dtheta  = -(d_right - d_left) / conf->track_mm;
+    float dtheta  = -(d_right - d_left) / db_track_effective_mm(d_left, d_right);
 
     float turn_scale = 1.0f;
     if (dd > 0 && conf->turn_speed_ref_mm_s > 0) {
@@ -238,12 +252,18 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
         return;
     }
 
+    float lx0, ly0, lx1, ly1;
+    _lever(conf, est->theta, &lx0, &ly0);
     float mid = est->theta + 0.5f * dtheta;
     float c   = cosf(mid);
     float s   = sinf(mid);
     est->x += -d * s;
     est->y += d * c;
     est->theta = _wrap(est->theta + dtheta);
+    _lever(conf, est->theta, &lx1, &ly1);
+    est->travel.x[est->travel.head] = -d * s + lx1 - lx0;
+    est->travel.y[est->travel.head] = d * c + ly1 - ly0;
+    est->travel.head                = (est->travel.head + 1) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
 
     // F = [[1, 0, f0], [0, 1, f1], [0, 0, 1]]
     float(*P)[3] = est->P;

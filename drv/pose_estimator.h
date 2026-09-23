@@ -9,10 +9,12 @@
  * The state is the wheel-axle midpoint and the heading, in the screen frame
  * the rest of the system uses: x right, y down, heading 0 facing +y and
  * positive clockwise, so body-forward is (-sin, +cos). Predict runs on every
- * scheduler tick from encoder deltas over DB_TRACK_EFFECTIVE; update runs once
+ * scheduler tick from encoder deltas over db_track_effective_mm(); update runs once
  * per new LH2 fix, with a position-only measurement of the photodiode, which
  * sits a lever arm ahead of the axle. That offset is what makes heading
- * observable while the robot turns in place.
+ * observable while the robot turns in place. A fix is some ticks old when it
+ * arrives, so it is first moved forward by the photodiode travel odometry saw
+ * since.
  *
  * Process noise grows with distance travelled, never with the call rate, and
  * the heading's share also with how fast the robot turns, since slip is
@@ -41,10 +43,10 @@
 /// Period of one scheduler tick, the unit of the elapsed_ticks argument
 #define DB_POSE_ESTIMATOR_TICK_MS (10U)
 
-/// LH2 position variance per axis, in mm^2.
-/// TODO: placeholder. At rest the solve does not leave one integer mm and spin
-/// fixes fit a circle to 1.5 mm rms; set from the moving LH2 noise measurement.
-#define DB_POSE_ESTIMATOR_R_POS_MM2 (9.0f)
+/// LH2 position variance per axis, in mm^2: 2 mm sigma, the top of the 1 to 2 mm
+/// measured on moving straights and arcs, which also covers a fix age that is
+/// 10 ms off DB_POSE_ESTIMATOR_FIX_AGE_TICKS
+#define DB_POSE_ESTIMATOR_R_POS_MM2 (4.0f)
 
 /// Position variance added per mm the axle midpoint travels, in mm^2 / mm.
 /// TODO: placeholder, sized from 5 to 12 mm endpoint spread over 0.6 m.
@@ -66,8 +68,21 @@
 #define DB_POSE_ESTIMATOR_TURN_SPEED_REF_MM_S (250.0f)
 
 /// Squared Mahalanobis distance above which a fix is rejected: chi-square with
-/// 2 degrees of freedom at 99.9 %. TODO: set from the outlier distribution.
-#define DB_POSE_ESTIMATOR_GATE (13.8f)
+/// 2 degrees of freedom at 99.999 %, about 14 to 18 mm per axis while tracking.
+/// That passes every fix the floor saw on straights, arcs and spins up to
+/// 300 mm/s per wheel (worst 17 mm). At 13.8 (99.9 %) the gate locked out the
+/// fixes that would correct a 40 degree heading error.
+/// TODO: fast spins showed tails to 32 mm, and no fix was off by more than
+/// 50 mm, which argues for a gate near 40 mm; gross outliers are still unmeasured.
+#define DB_POSE_ESTIMATOR_GATE (23.0f)
+
+/// Age of a fix when it reaches the estimator, in scheduler ticks. Each fix is
+/// moved forward by the photodiode travel odometry saw over that many predicts.
+/// TODO: estimated at 30 to 50 ms; the app can stamp sweep capture itself.
+#define DB_POSE_ESTIMATOR_FIX_AGE_TICKS (4U)
+
+/// Longest fix age the estimator can compensate, in predict calls
+#define DB_POSE_ESTIMATOR_FIX_AGE_MAX (8U)
 
 /// Scheduler ticks without an accepted fix before TRACKING becomes LOST (1 s)
 #define DB_POSE_ESTIMATOR_TIMEOUT_TICKS (100U)
@@ -99,7 +114,6 @@ typedef enum {
 
 /// Model and noise; the app holds one, the estimator keeps a pointer to it
 typedef struct {
-    float    track_mm;                    ///< track odometry divides by, mm
     float    lever_mm;                    ///< axle midpoint to photodiode, mm
     float    lever_angle_deg;             ///< direction of that offset, deg clockwise from forward
     float    r_pos_mm2;                   ///< LH2 variance per axis, mm^2
@@ -108,11 +122,19 @@ typedef struct {
     float    q_heading_turn_deg2_per_mm;  ///< heading variance per mm of |d_right - d_left|
     float    turn_speed_ref_mm_s;         ///< |v_right - v_left| above which the turn term scales up, mm/s
     float    gate;                        ///< squared Mahalanobis rejection threshold
+    uint32_t fix_age_ticks;               ///< fix age compensated, at most DB_POSE_ESTIMATOR_FIX_AGE_MAX
     uint32_t timeout_ticks;               ///< ticks without an accepted fix before LOST
     uint32_t seed_fixes;                  ///< fixes a seed chain needs
     float    seed_tolerance_mm;           ///< chain consistency tolerance, mm
     float    acquire_mm;                  ///< body-frame photodiode travel needed for heading, mm
 } db_pose_estimator_conf_t;
+
+/// Photodiode travel over the most recent predicts, newest at head - 1
+typedef struct {
+    float    x[DB_POSE_ESTIMATOR_FIX_AGE_MAX];  ///< mm
+    float    y[DB_POSE_ESTIMATOR_FIX_AGE_MAX];  ///< mm
+    uint32_t head;                              ///< next slot
+} db_pose_estimator_travel_t;
 
 /// Estimator state
 typedef struct {
@@ -123,6 +145,7 @@ typedef struct {
     float                           theta;               ///< heading, rad, in [-pi, pi)
     float                           P[3][3];             ///< covariance of [x mm, y mm, theta rad]
     uint32_t                        ticks_since_accept;  ///< saturating
+    db_pose_estimator_travel_t      travel;              ///< for moving a fix forward by its age
     float                           chain_x;             ///< first fix of the seed chain, mm
     float                           chain_y;             ///< first fix of the seed chain, mm
     float                           chain_bx;            ///< axle travel since that fix, mm, in the body frame at that fix

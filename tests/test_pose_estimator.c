@@ -2,7 +2,7 @@
  * @file
  * @brief  Host test of drv/pose_estimator against a simulated robot
  *
- * The simulated robot turns over the same track the estimator is given, and its
+ * The simulated robot turns over the same effective track the estimator uses, and its
  * photodiode sits on the same lever arm, so these checks prove the filter's
  * logic, not the model's constants.
  *
@@ -35,7 +35,6 @@ static int _passed = 0;
 #define DEG ((float)M_PI / 180.0f)
 
 static const db_pose_estimator_conf_t _conf = {
-    .track_mm                   = DB_TRACK_EFFECTIVE,
     .lever_mm                   = DB_LH2_LEVER_ARM_EFFECTIVE,
     .lever_angle_deg            = DB_LH2_LEVER_ANGLE,
     .r_pos_mm2                  = DB_POSE_ESTIMATOR_R_POS_MM2,
@@ -44,6 +43,7 @@ static const db_pose_estimator_conf_t _conf = {
     .q_heading_turn_deg2_per_mm = DB_POSE_ESTIMATOR_Q_HEADING_TURN_DEG2_PER_MM,
     .turn_speed_ref_mm_s        = DB_POSE_ESTIMATOR_TURN_SPEED_REF_MM_S,
     .gate                       = DB_POSE_ESTIMATOR_GATE,
+    .fix_age_ticks              = DB_POSE_ESTIMATOR_FIX_AGE_TICKS,
     .timeout_ticks              = DB_POSE_ESTIMATOR_TIMEOUT_TICKS,
     .seed_fixes                 = DB_POSE_ESTIMATOR_SEED_FIXES,
     .seed_tolerance_mm          = DB_POSE_ESTIMATOR_SEED_TOLERANCE_MM,
@@ -56,11 +56,22 @@ static const db_pose_estimator_conf_t _conf = {
 #define TICKS_PER_FIX    (10U)
 #define LH2_NOISE_SD_MM  (1.0f)
 
+#define SIM_HISTORY (16U)
+
 typedef struct {
-    float    x;      ///< axle midpoint, mm
-    float    y;      ///< axle midpoint, mm
-    float    theta;  ///< rad, 0 along +y, clockwise positive
-    uint32_t seed;   ///< noise generator state
+    float x;      ///< axle midpoint, mm
+    float y;      ///< axle midpoint, mm
+    float theta;  ///< rad, 0 along +y, clockwise positive
+} pose_t;
+
+typedef struct {
+    float    x;                     ///< axle midpoint, mm
+    float    y;                     ///< axle midpoint, mm
+    float    theta;                 ///< rad, 0 along +y, clockwise positive
+    uint32_t seed;                  ///< noise generator state
+    uint32_t steps;                 ///< steps taken
+    pose_t   history[SIM_HISTORY];  ///< pose after each recent step
+    uint32_t fix_age;               ///< steps a fix lags the robot by
 } robot_t;
 
 static void _robot_step(robot_t *r, int32_t counts_left, int32_t counts_right) {
@@ -68,12 +79,14 @@ static void _robot_step(robot_t *r, int32_t counts_left, int32_t counts_right) {
     float dr = (float)counts_right * DB_MM_PER_COUNT / SIM_SUBSTEPS;
     for (int i = 0; i < SIM_SUBSTEPS; i++) {
         float d  = 0.5f * (dl + dr);
-        float dt = -(dr - dl) / _conf.track_mm;
+        float dt = -(dr - dl) / db_track_effective_mm(dl, dr);
         float m  = r->theta + 0.5f * dt;
         r->x += -d * sinf(m);
         r->y += d * cosf(m);
         r->theta += dt;
     }
+    r->history[r->steps % SIM_HISTORY] = (pose_t){ r->x, r->y, r->theta };
+    r->steps++;
 }
 
 static float _noise(robot_t *r) {
@@ -85,9 +98,15 @@ static float _noise(robot_t *r) {
     return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float)M_PI * u2);
 }
 
+/// The photodiode as LH2 reports it: the pose fix_age steps ago, or now
+/// before the robot has taken that many
 static void _robot_sensor(robot_t *r, float noise_sd, float *x, float *y) {
-    *x = r->x - _conf.lever_mm * sinf(r->theta) + noise_sd * _noise(r);
-    *y = r->y + _conf.lever_mm * cosf(r->theta) + noise_sd * _noise(r);
+    pose_t p = { r->x, r->y, r->theta };
+    if (r->fix_age > 0 && r->steps > r->fix_age) {
+        p = r->history[(r->steps - 1 - r->fix_age) % SIM_HISTORY];
+    }
+    *x = p.x - _conf.lever_mm * sinf(p.theta) + noise_sd * _noise(r);
+    *y = p.y + _conf.lever_mm * cosf(p.theta) + noise_sd * _noise(r);
 }
 
 static float _angle_error_deg(float a_rad, float b_rad) {
@@ -147,7 +166,7 @@ static void test_arc_prediction(void) {
         db_pose_estimator_predict(&est, 20, 10, 1);
     }
     float distance = 200 * 15 * DB_MM_PER_COUNT;
-    float turn     = 200 * 10 * DB_MM_PER_COUNT / _conf.track_mm;
+    float turn     = 200 * 10 * DB_MM_PER_COUNT / DB_TRACK_EFFECTIVE_ARC;
     float k        = turn / distance;
     float want_x   = (cosf(turn) - 1.0f) / k;
     float want_y   = sinf(turn) / k;
@@ -162,9 +181,21 @@ static void test_spin_prediction(void) {
     for (int t = 0; t < 100; t++) {
         db_pose_estimator_predict(&est, 5, -5, 1);
     }
-    float turn = 100 * 10 * DB_MM_PER_COUNT / _conf.track_mm;
+    float turn = 100 * 10 * DB_MM_PER_COUNT / DB_TRACK_EFFECTIVE;
     CHECK(fabsf(est.x - 500) < 1e-3f && fabsf(est.y - 500) < 1e-3f, "a spin leaves the axle in place: got (%.3f, %.3f)", est.x, est.y);
     CHECK(fabsf(est.theta - turn) < 1e-4f, "a spin turns by the travel difference over the effective track: got %.4f, want %.4f", est.theta, turn);
+}
+
+static void test_effective_track(void) {
+    CHECK(db_track_effective_mm(100, -100) == DB_TRACK_EFFECTIVE, "a spin uses the spin track, got %.2f", db_track_effective_mm(100, -100));
+    CHECK(db_track_effective_mm(-100, 100) == DB_TRACK_EFFECTIVE, "either way round, got %.2f", db_track_effective_mm(-100, 100));
+    float pivot = DB_TRACK_EFFECTIVE + (DB_TRACK_EFFECTIVE_ARC - DB_TRACK_EFFECTIVE) / DB_TRACK_EFFECTIVE_ARC_RATIO;
+    CHECK(fabsf(db_track_effective_mm(0, 100) - pivot) < 1e-3f && fabsf(db_track_effective_mm(0, -100) - pivot) < 1e-3f, "a pivot on one wheel is part way, got %.2f, want %.2f", db_track_effective_mm(0, 100), pivot);
+    CHECK(fabsf(db_track_effective_mm(0, 10) - db_track_effective_mm(0, 1000)) < 1e-3f, "only the ratio counts");
+    float r100 = 0.5f * DB_TRACK_EFFECTIVE_ARC_RATIO;
+    CHECK(fabsf(db_track_effective_mm(r100 + 0.5f, r100 - 0.5f) - DB_TRACK_EFFECTIVE_ARC) < 1e-3f, "a 100 mm radius reaches the arc track, got %.2f", db_track_effective_mm(r100 + 0.5f, r100 - 0.5f));
+    CHECK(db_track_effective_mm(300, 200) == DB_TRACK_EFFECTIVE_ARC && db_track_effective_mm(-300, -200) == DB_TRACK_EFFECTIVE_ARC, "wider arcs hold the arc track, forward or back");
+    CHECK(db_track_effective_mm(100, 100) == DB_TRACK_EFFECTIVE_ARC && db_track_effective_mm(0, 0) == DB_TRACK_EFFECTIVE_ARC, "no turn does not divide by zero");
 }
 
 static void test_lever_arm_sensor(void) {
@@ -184,7 +215,7 @@ static void test_lever_arm_spin_update(void) {
     // Turning in place swings the photodiode round a 51.5 mm circle; with the
     // lever arm in H every fix fits, and without it the fixes are outliers
     db_pose_estimator_t est;
-    robot_t             r = { .x = 1500, .y = 1000, .theta = 30 * DEG, .seed = 1 };
+    robot_t             r = { .x = 1500, .y = 1000, .theta = 30 * DEG, .seed = 1, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     db_pose_estimator_seed(&est, r.x, r.y, 30, 2);
     uint32_t accepted = _run(&est, &r, 5, -5, 700, 1, LH2_NOISE_SD_MM);
@@ -195,7 +226,7 @@ static void test_lever_arm_spin_update(void) {
 
     db_pose_estimator_conf_t no_lever = _conf;
     no_lever.lever_mm                 = 0;
-    robot_t r2                        = { .x = 1500, .y = 1000, .theta = 30 * DEG, .seed = 1 };
+    robot_t r2                        = { .x = 1500, .y = 1000, .theta = 30 * DEG, .seed = 1, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &no_lever);
     db_pose_estimator_seed(&est, r2.x, r2.y, 30, 2);
     accepted = _run(&est, &r2, 5, -5, 300, 1, LH2_NOISE_SD_MM);
@@ -204,7 +235,7 @@ static void test_lever_arm_spin_update(void) {
 
 static void test_converges_from_wrong_heading(void) {
     db_pose_estimator_t est;
-    robot_t             r = { .x = 1000, .y = 1000, .theta = 40 * DEG, .seed = 2 };
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 40 * DEG, .seed = 2, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     db_pose_estimator_seed(&est, r.x, r.y, 0, 60);
     _run(&est, &r, 10, 10, 300, 1, LH2_NOISE_SD_MM);
@@ -214,7 +245,7 @@ static void test_converges_from_wrong_heading(void) {
 
 static void test_acquire_heading_from_motion(void) {
     db_pose_estimator_t est;
-    robot_t             r = { .x = 2000, .y = 800, .theta = 130 * DEG, .seed = 3 };
+    robot_t             r = { .x = 2000, .y = 800, .theta = 130 * DEG, .seed = 3, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     _run(&est, &r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
     float h = 0;
@@ -232,7 +263,7 @@ static void test_acquire_heading_from_motion(void) {
 static void test_acquire_heading_from_spin(void) {
     // No translation at all: only the lever arm can reveal the heading
     db_pose_estimator_t est;
-    robot_t             r = { .x = 1200, .y = 1200, .theta = -60 * DEG, .seed = 4 };
+    robot_t             r = { .x = 1200, .y = 1200, .theta = -60 * DEG, .seed = 4, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     _run(&est, &r, -5, 5, 300, 1, LH2_NOISE_SD_MM);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING, "a spin in place acquires heading, status %d", est.status);
@@ -242,7 +273,7 @@ static void test_acquire_heading_from_spin(void) {
 
 static void test_gate_rejects_outlier(void) {
     db_pose_estimator_t est;
-    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 5 };
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 5, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
     _run(&est, &r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
@@ -259,7 +290,7 @@ static void test_timeout_reseeds(void) {
     // Picked up and put down elsewhere, turned: the encoders never saw it, so
     // every fix is outside the gate until the timeout, then a chain reseeds
     db_pose_estimator_t est;
-    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 6 };
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 6, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
     _run(&est, &r, 0, 0, 50, 1, LH2_NOISE_SD_MM);
@@ -282,7 +313,7 @@ static void test_occlusion_keeps_heading(void) {
     // No fixes at all for 2 s: lost, but odometry carried the pose, so the
     // first fix back is inside the gate and nothing is reseeded
     db_pose_estimator_t est;
-    robot_t             r = { .x = 1000, .y = 1000, .theta = 20 * DEG, .seed = 7 };
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 20 * DEG, .seed = 7, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
     db_pose_estimator_seed(&est, r.x, r.y, 20, 2);
     _run(&est, &r, 10, 10, 100, 1, LH2_NOISE_SD_MM);
@@ -292,6 +323,32 @@ static void test_occlusion_keeps_heading(void) {
     _robot_sensor(&r, LH2_NOISE_SD_MM, &zx, &zy);
     CHECK(db_pose_estimator_update(&est, zx, zy) == DB_POSE_ESTIMATOR_ACCEPTED, "the first fix back is accepted, d2 %.1f", est.last_d2);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 0, "tracking again without a reseed, status %d, seeds %u", est.status, est.seeds);
+}
+
+static void test_fix_age_compensated(void) {
+    // 300 mm/s straight and a 200 mm/s-per-wheel spin, with every fix
+    // DB_POSE_ESTIMATOR_FIX_AGE_TICKS old
+    int32_t fast = (int32_t)lroundf(300.0f * 0.01f / DB_MM_PER_COUNT);
+    int32_t spin = (int32_t)lroundf(200.0f * 0.01f / DB_MM_PER_COUNT);
+    for (int aged = 1; aged >= 0; aged--) {
+        db_pose_estimator_conf_t conf = _conf;
+        conf.fix_age_ticks            = aged ? DB_POSE_ESTIMATOR_FIX_AGE_TICKS : 0;
+        db_pose_estimator_t est;
+        robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 8, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+        db_pose_estimator_init(&est, &conf);
+        db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+        _run(&est, &r, fast, fast, 300, 1, LH2_NOISE_SD_MM);
+        float straight_mm = hypotf(est.x - r.x, est.y - r.y);
+        _run(&est, &r, spin, -spin, 200, 1, LH2_NOISE_SD_MM);
+        float spin_deg = _angle_error_deg(est.theta, r.theta);
+        if (aged) {
+            CHECK(est.rejected == 0, "no fix is rejected at speed once its age is compensated, got %u", est.rejected);
+            CHECK(straight_mm < 4.0f, "axle within 4 mm at 300 mm/s, %.2f off", straight_mm);
+            CHECK(spin_deg < 2.0f, "heading within 2 deg in a fast spin, %.2f off", spin_deg);
+        } else {
+            CHECK(est.rejected > 0 || straight_mm > 8.0f, "uncompensated, the same fixes lag or are rejected: %u rejected, %.2f mm off", est.rejected, straight_mm);
+        }
+    }
 }
 
 static void test_noise_scales_with_distance(void) {
@@ -358,6 +415,7 @@ int main(void) {
     test_straight_prediction();
     test_arc_prediction();
     test_spin_prediction();
+    test_effective_track();
     test_lever_arm_sensor();
     test_lever_arm_spin_update();
     test_converges_from_wrong_heading();
@@ -366,6 +424,7 @@ int main(void) {
     test_gate_rejects_outlier();
     test_timeout_reseeds();
     test_occlusion_keeps_heading();
+    test_fix_age_compensated();
     test_noise_scales_with_distance();
     test_turn_noise_grows_with_turn_speed();
     printf("%d passed, %d failed\n", _passed, _failed);
