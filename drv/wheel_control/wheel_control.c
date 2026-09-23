@@ -154,6 +154,6 @@ int32_t db_wheel_control_counts(int32_t acc, uint32_t dbl) {
 
 void db_wheel_control_from_twist(const db_body_twist_t *twist, float *left_mm_s, float *right_mm_s) {
     float w     = twist->omega_deg_s * (float)M_PI / 180.0f;
-    *left_mm_s  = twist->v_mm_s + w * DB_TRACK / 2.0f;
-    *right_mm_s = twist->v_mm_s - w * DB_TRACK / 2.0f;
+    *left_mm_s  = twist->v_mm_s + w * DB_TRACK_EFFECTIVE / 2.0f;
+    *right_mm_s = twist->v_mm_s - w * DB_TRACK_EFFECTIVE / 2.0f;
 }

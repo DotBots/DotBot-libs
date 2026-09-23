@@ -444,7 +444,7 @@ static void test_twist(void) {
     CHECK(l == 120 && r == 120, "no turn rate drives both wheels equally, got %.1f %.1f", l, r);
     db_body_twist_t clockwise = { .v_mm_s = 0, .omega_deg_s = 90 };
     db_wheel_control_from_twist(&clockwise, &l, &r);
-    float half = (float)M_PI / 2.0f * DB_TRACK / 2.0f;
+    float half = (float)M_PI / 2.0f * DB_TRACK_EFFECTIVE / 2.0f;
     CHECK(fabsf(l - half) < 1e-3f && fabsf(r + half) < 1e-3f, "clockwise speeds the left wheel up: got %.2f %.2f, want %.2f %.2f", l, r, half, -half);
 }
 
