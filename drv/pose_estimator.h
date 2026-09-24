@@ -19,7 +19,10 @@
  *
  * Process noise grows with distance travelled, never with the call rate, and
  * the heading's share also with how fast the robot turns, since slip is
- * dominated by turning. A fix whose squared Mahalanobis distance exceeds the
+ * dominated by turning. Both also grow with each change of wheel speed beyond
+ * a deadband, because a hard start or stop slips or skids the wheels by more
+ * than distance alone accounts for; wheel speed for that is filtered with a
+ * time constant of speed_tau_ms. A fix whose squared Mahalanobis distance exceeds the
  * gate is rejected.
  *
  * Life cycle: SEEDING until a chain of consistent fixes has seen the photodiode
@@ -30,9 +33,13 @@
  *
  * Kidnap: while TRACKING, kidnap_fixes rejected fixes in a row that agree
  * within seed_tolerance_mm, with at most kidnap_still_mm of wheel travel since
- * the first of them, mean the robot was moved by hand. The estimator returns
- * to SEEDING at once, with those fixes as the start of its chain, so heading
- * stays unknown until motion re-acquires it.
+ * the first of them, mean the robot was moved by hand, provided the wheels had
+ * also stood for kidnap_settle_ticks before the first of them. The estimator
+ * returns to SEEDING at once, with those fixes as the start of its chain, so
+ * heading stays unknown until motion re-acquires it. The same fixes arriving
+ * sooner after motion, within reanchor_mm of the estimate, are slip the
+ * odometry missed: the position is moved onto them, the heading is kept and
+ * its variance raised by reanchor_heading_var_deg2.
  *
  * No hardware calls, so the module also builds on the host for its tests.
  *
@@ -111,6 +118,39 @@
 /// those fixes, for the wheels to count as still
 #define DB_POSE_ESTIMATOR_KIDNAP_STILL_MM (2.0f)
 
+/// Wheels that stood this long before the first rejected fix of a chain make
+/// it a kidnap, ticks: 0.5 s. A robot that drove a moment ago re-anchors instead.
+#define DB_POSE_ESTIMATOR_KIDNAP_SETTLE_TICKS (50U)
+
+/// Both filtered wheel speeds below this count as standing, mm/s: well above
+/// what a stray count reads as, well below any commanded speed
+#define DB_POSE_ESTIMATOR_STILL_MM_S (20.0f)
+
+/// Largest jump, in mm, from the estimated photodiode to consistent rejected
+/// fixes that a robot fresh from driving re-anchors to rather than reseeding.
+/// Hard stops from 500 to 700 mm/s left 25 to 45 mm on the floor.
+#define DB_POSE_ESTIMATOR_REANCHOR_MM (60.0f)
+
+/// Heading variance added on a re-anchor, deg^2: 5 deg sigma
+#define DB_POSE_ESTIMATOR_REANCHOR_HEADING_VAR_DEG2 (25.0f)
+
+/// Position variance per axis added per mm/s of wheel speed change beyond the
+/// deadband, summed over both wheels, mm^2 / (mm/s): a hard stop from 600 mm/s
+/// adds about 60 mm^2, which lets in the 35 to 40 mm of slip it can leave;
+/// larger slips after driving are re-anchored
+#define DB_POSE_ESTIMATOR_Q_POS_SLIP_MM2_PER_MM_S (0.06f)
+
+/// Heading variance added per mm/s of wheel speed change beyond the deadband,
+/// deg^2 / (mm/s): a hard stop from 700 mm/s adds about (4 deg)^2
+#define DB_POSE_ESTIMATOR_Q_HEADING_SLIP_DEG2_PER_MM_S (0.012f)
+
+/// Change of the filtered wheel speed per tick not counted as speed change,
+/// mm/s: above the 3 mm/s one count swings it by, below a hard start or stop
+#define DB_POSE_ESTIMATOR_SLIP_DEADBAND_MM_S (10.0f)
+
+/// Time constant of the first-order filter on each wheel's speed, ms
+#define DB_POSE_ESTIMATOR_SPEED_TAU_MS (30.0f)
+
 /// Life-cycle state
 typedef enum {
     DB_POSE_ESTIMATOR_SEEDING,   ///< No pose; collecting a chain of consistent fixes
@@ -128,21 +168,29 @@ typedef enum {
 
 /// Model and noise; the app holds one, the estimator keeps a pointer to it
 typedef struct {
-    float    lever_mm;                    ///< axle midpoint to photodiode, mm
-    float    lever_angle_deg;             ///< direction of that offset, deg clockwise from forward
-    float    r_pos_mm2;                   ///< LH2 variance per axis, mm^2
-    float    q_pos_mm2_per_mm;            ///< position variance per mm travelled
-    float    q_heading_roll_deg2_per_mm;  ///< heading variance per mm travelled
-    float    q_heading_turn_deg2_per_mm;  ///< heading variance per mm of |d_right - d_left|
-    float    turn_speed_ref_mm_s;         ///< |v_right - v_left| above which the turn term scales up, mm/s
-    float    gate;                        ///< squared Mahalanobis rejection threshold
-    uint32_t fix_age_ticks;               ///< fix age compensated, at most DB_POSE_ESTIMATOR_FIX_AGE_MAX
-    uint32_t timeout_ticks;               ///< ticks without an accepted fix before LOST
-    uint32_t seed_fixes;                  ///< fixes a seed chain needs
-    float    seed_tolerance_mm;           ///< chain consistency tolerance, mm
-    float    acquire_mm;                  ///< body-frame photodiode travel needed for heading, mm
-    uint32_t kidnap_fixes;                ///< consistent rejected fixes with the wheels still that reseed; 0 disables
-    float    kidnap_still_mm;             ///< wheel travel |d_left| + |d_right| over those fixes still counted as still, mm
+    float    lever_mm;                      ///< axle midpoint to photodiode, mm
+    float    lever_angle_deg;               ///< direction of that offset, deg clockwise from forward
+    float    r_pos_mm2;                     ///< LH2 variance per axis, mm^2
+    float    q_pos_mm2_per_mm;              ///< position variance per mm travelled
+    float    q_heading_roll_deg2_per_mm;    ///< heading variance per mm travelled
+    float    q_heading_turn_deg2_per_mm;    ///< heading variance per mm of |d_right - d_left|
+    float    turn_speed_ref_mm_s;           ///< |v_right - v_left| above which the turn term scales up, mm/s
+    float    gate;                          ///< squared Mahalanobis rejection threshold
+    uint32_t fix_age_ticks;                 ///< fix age compensated, at most DB_POSE_ESTIMATOR_FIX_AGE_MAX
+    uint32_t timeout_ticks;                 ///< ticks without an accepted fix before LOST
+    uint32_t seed_fixes;                    ///< fixes a seed chain needs
+    float    seed_tolerance_mm;             ///< chain consistency tolerance, mm
+    float    acquire_mm;                    ///< body-frame photodiode travel needed for heading, mm
+    uint32_t kidnap_fixes;                  ///< consistent rejected fixes with the wheels still that reseed; 0 disables
+    float    kidnap_still_mm;               ///< wheel travel |d_left| + |d_right| over those fixes still counted as still, mm
+    uint32_t kidnap_settle_ticks;           ///< wheels standing this long before the first of them make it a kidnap; 0 always does
+    float    still_mm_s;                    ///< both averaged wheel speeds below this count as standing, mm/s
+    float    reanchor_mm;                   ///< largest jump re-anchored to after driving, mm; 0 disables
+    float    reanchor_heading_var_deg2;     ///< heading variance added on a re-anchor, deg^2
+    float    q_pos_slip_mm2_per_mm_s;       ///< position variance per mm/s of wheel speed change past the deadband
+    float    q_heading_slip_deg2_per_mm_s;  ///< heading variance per mm/s of wheel speed change past the deadband
+    float    slip_deadband_mm_s;            ///< filtered speed change per tick below which nothing is added, mm/s
+    float    speed_tau_ms;                  ///< wheel speed filter time constant, ms
 } db_pose_estimator_conf_t;
 
 /// Odometry of the most recent predicts, in every state, newest at head - 1
@@ -174,12 +222,17 @@ typedef struct {
     float                           kidnap_y;            ///< first of the consecutive rejected fixes, mm
     float                           kidnap_travel_mm;    ///< wheel travel |d_left| + |d_right| since that fix, mm
     uint32_t                        kidnap_count;        ///< consecutive consistent rejected fixes, 0 when none
+    bool                            kidnap_settled;      ///< the wheels had stood for the settle time before the first of them
+    float                           v_left;              ///< filtered left wheel speed, mm/s
+    float                           v_right;             ///< filtered right wheel speed, mm/s
+    uint32_t                        still_ticks;         ///< consecutive predicts with both wheels standing, saturating
     float                           last_d2;             ///< squared Mahalanobis distance of the last gated fix
     uint32_t                        predicts;            ///< predict calls, wraps
     uint32_t                        accepted;            ///< fixes applied, wraps
     uint32_t                        rejected;            ///< fixes rejected, wraps
     uint32_t                        seeds;               ///< pose seeded or reseeded from a chain, wraps
     uint32_t                        kidnaps;             ///< returns to SEEDING on a kidnap, wraps
+    uint32_t                        reanchors;           ///< position moved onto consistent rejected fixes after driving, wraps
 } db_pose_estimator_t;
 
 //=========================== prototypes =======================================

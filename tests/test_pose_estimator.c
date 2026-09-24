@@ -35,21 +35,29 @@ static int _passed = 0;
 #define DEG ((float)M_PI / 180.0f)
 
 static const db_pose_estimator_conf_t _conf = {
-    .lever_mm                   = DB_LH2_LEVER_ARM_EFFECTIVE,
-    .lever_angle_deg            = DB_LH2_LEVER_ANGLE,
-    .r_pos_mm2                  = DB_POSE_ESTIMATOR_R_POS_MM2,
-    .q_pos_mm2_per_mm           = DB_POSE_ESTIMATOR_Q_POS_MM2_PER_MM,
-    .q_heading_roll_deg2_per_mm = DB_POSE_ESTIMATOR_Q_HEADING_ROLL_DEG2_PER_MM,
-    .q_heading_turn_deg2_per_mm = DB_POSE_ESTIMATOR_Q_HEADING_TURN_DEG2_PER_MM,
-    .turn_speed_ref_mm_s        = DB_POSE_ESTIMATOR_TURN_SPEED_REF_MM_S,
-    .gate                       = DB_POSE_ESTIMATOR_GATE,
-    .fix_age_ticks              = DB_POSE_ESTIMATOR_FIX_AGE_TICKS,
-    .timeout_ticks              = DB_POSE_ESTIMATOR_TIMEOUT_TICKS,
-    .seed_fixes                 = DB_POSE_ESTIMATOR_SEED_FIXES,
-    .seed_tolerance_mm          = DB_POSE_ESTIMATOR_SEED_TOLERANCE_MM,
-    .acquire_mm                 = DB_POSE_ESTIMATOR_ACQUIRE_MM,
-    .kidnap_fixes               = DB_POSE_ESTIMATOR_KIDNAP_FIXES,
-    .kidnap_still_mm            = DB_POSE_ESTIMATOR_KIDNAP_STILL_MM,
+    .lever_mm                     = DB_LH2_LEVER_ARM_EFFECTIVE,
+    .lever_angle_deg              = DB_LH2_LEVER_ANGLE,
+    .r_pos_mm2                    = DB_POSE_ESTIMATOR_R_POS_MM2,
+    .q_pos_mm2_per_mm             = DB_POSE_ESTIMATOR_Q_POS_MM2_PER_MM,
+    .q_heading_roll_deg2_per_mm   = DB_POSE_ESTIMATOR_Q_HEADING_ROLL_DEG2_PER_MM,
+    .q_heading_turn_deg2_per_mm   = DB_POSE_ESTIMATOR_Q_HEADING_TURN_DEG2_PER_MM,
+    .turn_speed_ref_mm_s          = DB_POSE_ESTIMATOR_TURN_SPEED_REF_MM_S,
+    .gate                         = DB_POSE_ESTIMATOR_GATE,
+    .fix_age_ticks                = DB_POSE_ESTIMATOR_FIX_AGE_TICKS,
+    .timeout_ticks                = DB_POSE_ESTIMATOR_TIMEOUT_TICKS,
+    .seed_fixes                   = DB_POSE_ESTIMATOR_SEED_FIXES,
+    .seed_tolerance_mm            = DB_POSE_ESTIMATOR_SEED_TOLERANCE_MM,
+    .acquire_mm                   = DB_POSE_ESTIMATOR_ACQUIRE_MM,
+    .kidnap_fixes                 = DB_POSE_ESTIMATOR_KIDNAP_FIXES,
+    .kidnap_still_mm              = DB_POSE_ESTIMATOR_KIDNAP_STILL_MM,
+    .kidnap_settle_ticks          = DB_POSE_ESTIMATOR_KIDNAP_SETTLE_TICKS,
+    .still_mm_s                   = DB_POSE_ESTIMATOR_STILL_MM_S,
+    .reanchor_mm                  = DB_POSE_ESTIMATOR_REANCHOR_MM,
+    .reanchor_heading_var_deg2    = DB_POSE_ESTIMATOR_REANCHOR_HEADING_VAR_DEG2,
+    .q_pos_slip_mm2_per_mm_s      = DB_POSE_ESTIMATOR_Q_POS_SLIP_MM2_PER_MM_S,
+    .q_heading_slip_deg2_per_mm_s = DB_POSE_ESTIMATOR_Q_HEADING_SLIP_DEG2_PER_MM_S,
+    .slip_deadband_mm_s           = DB_POSE_ESTIMATOR_SLIP_DEADBAND_MM_S,
+    .speed_tau_ms                 = DB_POSE_ESTIMATOR_SPEED_TAU_MS,
 };
 
 //=========================== simulated robot ==================================
@@ -400,8 +408,12 @@ static void test_fix_age_compensated(void) {
 }
 
 static void test_noise_scales_with_distance(void) {
+    // The distance and turn terms alone: the slip term depends on speed changes
+    db_pose_estimator_conf_t conf     = _conf;
+    conf.q_pos_slip_mm2_per_mm_s      = 0;
+    conf.q_heading_slip_deg2_per_mm_s = 0;
     db_pose_estimator_t a, b;
-    db_pose_estimator_init(&a, &_conf);
+    db_pose_estimator_init(&a, &conf);
     db_pose_estimator_seed(&a, 0, 0, 0, 2);
     float before = a.P[2][2];
     for (int t = 0; t < 1000; t++) {
@@ -410,8 +422,8 @@ static void test_noise_scales_with_distance(void) {
     CHECK(a.P[0][0] == a.conf->r_pos_mm2 && a.P[2][2] == before, "standing still adds no process noise over 1000 calls");
 
     // The same spin in 100 calls or in one
-    db_pose_estimator_init(&a, &_conf);
-    db_pose_estimator_init(&b, &_conf);
+    db_pose_estimator_init(&a, &conf);
+    db_pose_estimator_init(&b, &conf);
     db_pose_estimator_seed(&a, 0, 0, 0, 2);
     db_pose_estimator_seed(&b, 0, 0, 0, 2);
     for (int t = 0; t < 100; t++) {
@@ -421,8 +433,8 @@ static void test_noise_scales_with_distance(void) {
     CHECK(fabsf(a.P[2][2] - b.P[2][2]) < 1e-3f * b.P[2][2], "heading noise over a spin is independent of the call rate: %.6g against %.6g", a.P[2][2], b.P[2][2]);
 
     // The same straight in 100 calls or in one
-    db_pose_estimator_init(&a, &_conf);
-    db_pose_estimator_init(&b, &_conf);
+    db_pose_estimator_init(&a, &conf);
+    db_pose_estimator_init(&b, &conf);
     db_pose_estimator_seed(&a, 0, 0, 0, 0);
     db_pose_estimator_seed(&b, 0, 0, 0, 0);
     for (int t = 0; t < 100; t++) {
@@ -433,10 +445,152 @@ static void test_noise_scales_with_distance(void) {
     CHECK(fabsf(a.P[1][1] - b.P[1][1]) < 1e-3f * b.P[1][1], "position noise over a straight is independent of the call rate: %.6g against %.6g", a.P[1][1], b.P[1][1]);
 
     // Twice the distance, twice the heading noise
-    db_pose_estimator_init(&b, &_conf);
+    db_pose_estimator_init(&b, &conf);
     db_pose_estimator_seed(&b, 0, 0, 0, 0);
     db_pose_estimator_predict(&b, 2000, 2000, 200);
     CHECK(fabsf(b.P[2][2] - 2.0f * a.P[2][2]) < 1e-3f * b.P[2][2], "heading noise doubles with the distance: %.6g against 2 x %.6g", b.P[2][2], a.P[2][2]);
+}
+
+static void test_slip_noise_on_hard_stop(void) {
+    // Against the same drive with the slip term off: cruising with count
+    // jitter adds almost nothing, a stop from 700 mm/s in 100 ms adds a lot
+    db_pose_estimator_conf_t off     = _conf;
+    off.q_pos_slip_mm2_per_mm_s      = 0;
+    off.q_heading_slip_deg2_per_mm_s = 0;
+    db_pose_estimator_t est, ref;
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_init(&ref, &off);
+    db_pose_estimator_seed(&est, 0, 0, 0, 1);
+    db_pose_estimator_seed(&ref, 0, 0, 0, 1);
+    int32_t cruise = (int32_t)lroundf(700.0f * 0.01f / DB_MM_PER_COUNT);
+    for (int t = 0; t < 30; t++) {
+        db_pose_estimator_predict(&est, cruise, cruise, 1);
+        db_pose_estimator_predict(&ref, cruise, cruise, 1);
+    }
+    float h0 = est.P[2][2] - ref.P[2][2];
+    for (int t = 0; t < 100; t++) {
+        db_pose_estimator_predict(&est, cruise + (t % 2), cruise - (t % 2), 1);
+        db_pose_estimator_predict(&ref, cruise + (t % 2), cruise - (t % 2), 1);
+    }
+    CHECK(est.P[2][2] - ref.P[2][2] - h0 < 0.5f * DEG * DEG, "1 s at 700 mm/s with count jitter adds under 0.5 deg^2 of slip noise, %.2f", (est.P[2][2] - ref.P[2][2] - h0) / (DEG * DEG));
+    // Reset the heading variance so the stop's position share is not scaled by the cruise's
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            est.P[i][j] = ref.P[i][j] = (i == j) ? ((i == 2) ? DEG * DEG : 4.0f) : 0;
+        }
+    }
+    for (int t = 0; t < 10; t++) {
+        int32_t c = cruise * (9 - t) / 10;
+        db_pose_estimator_predict(&est, c, c, 1);
+        db_pose_estimator_predict(&ref, c, c, 1);
+    }
+    for (int t = 0; t < 20; t++) {
+        db_pose_estimator_predict(&est, 0, 0, 1);
+        db_pose_estimator_predict(&ref, 0, 0, 1);
+    }
+    CHECK(est.P[0][0] - ref.P[0][0] > 40.0f, "a hard stop from 700 mm/s adds over 40 mm^2 per axis, %.1f", est.P[0][0] - ref.P[0][0]);
+    CHECK((est.P[2][2] - ref.P[2][2]) / (DEG * DEG) > 9.0f, "and over (3 deg)^2 of heading variance, %.1f deg^2", (est.P[2][2] - ref.P[2][2]) / (DEG * DEG));
+}
+
+/// A sprint from rest and a hard stop in which the odometry counts slip_mm more
+/// travel than the ground saw, along the heading and across it; returns the
+/// estimator 0.5 s after the stop
+static void _sprint_and_slip(db_pose_estimator_t *est, const db_pose_estimator_conf_t *conf, float speed, float slip_mm, float lateral_mm, robot_t *r) {
+    db_pose_estimator_init(est, conf);
+    db_pose_estimator_seed(est, r->x, r->y, r->theta / DEG, 1);
+    _run(est, r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
+    int32_t  cruise = (int32_t)lroundf(speed * 0.01f / DB_MM_PER_COUNT);
+    uint32_t tick   = 0;
+    // 0.3 s at speed, then a 10-tick stop over which the odometry over-counts
+    for (int t = 0; t < 40; t++) {
+        int32_t c     = (t < 30) ? cruise : cruise * (39 - t) / 10;
+        int32_t extra = (t < 30) ? 0 : (int32_t)lroundf(slip_mm / DB_MM_PER_COUNT / 10.0f) * (speed < 0 ? -1 : 1);
+        _robot_step(r, c, c);
+        if (t >= 30) {
+            r->x += lateral_mm / 10.0f * cosf(r->theta);
+            r->y += lateral_mm / 10.0f * sinf(r->theta);
+        }
+        db_pose_estimator_predict(est, c + extra, c + extra, 1);
+        if (++tick % TICKS_PER_FIX == 0) {
+            float zx, zy;
+            _robot_sensor(r, LH2_NOISE_SD_MM, &zx, &zy);
+            db_pose_estimator_update(est, zx, zy);
+        }
+    }
+    for (int t = 0; t < 50; t++) {
+        _robot_step(r, 0, 0);
+        db_pose_estimator_predict(est, 0, 0, 1);
+        if (++tick % TICKS_PER_FIX == 0) {
+            float zx, zy;
+            _robot_sensor(r, LH2_NOISE_SD_MM, &zx, &zy);
+            db_pose_estimator_update(est, zx, zy);
+        }
+    }
+}
+
+static void test_hard_stop_slip_is_not_a_kidnap(void) {
+    // As on the floor: after a 500 to 600 mm/s sprint and a hard stop, the
+    // estimate sat 25 to 45 mm off steady fixes with the wheels still
+    const float speeds[]  = { 600, -600, 500, -500 };
+    const float slips[]   = { 35, 40, 30, 45 };
+    const float lateral[] = { 0, 0, 25, -20 };
+    for (unsigned i = 0; i < 4; i++) {
+        db_pose_estimator_t est;
+        robot_t             r = { .x = 1000, .y = 1000, .theta = 90 * DEG, .seed = 30 + i, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+        _sprint_and_slip(&est, &_conf, speeds[i], slips[i], lateral[i], &r);
+        float sx = 0, sy = 0, px, py;
+        _robot_sensor(&r, 0, &px, &py);
+        bool tracking = db_pose_estimator_sensor(&est, &sx, &sy);
+        CHECK(tracking && est.kidnaps == 0 && est.seeds == 0, "%+.0f mm/s, %.0f mm slip: still tracking, no kidnap, status %d kidnaps %u", speeds[i], slips[i], est.status, est.kidnaps);
+        if (lateral[i] == 0) {
+            CHECK(est.reanchors == 0, "%+.0f mm/s, %.0f mm slip: the slip noise lets the fixes in, no re-anchor needed, %u", speeds[i], slips[i], est.reanchors);
+        }
+        CHECK(hypotf(sx - px, sy - py) < 5.0f, "%+.0f mm/s, %.0f mm slip: on the fixes 0.5 s after the stop, %.1f mm off", speeds[i], slips[i], hypotf(sx - px, sy - py));
+        // A sideways slide is partly read as a turn until the robot moves again
+        float heading_tol = (lateral[i] == 0) ? 4.0f : 8.0f;
+        CHECK(_angle_error_deg(est.theta, r.theta) < heading_tol, "%+.0f mm/s, %.0f mm slip: heading kept, %.1f deg off", speeds[i], slips[i], _angle_error_deg(est.theta, r.theta));
+    }
+}
+
+static void test_reanchor_after_driving(void) {
+    // Without the slip noise the gate rejects the fixes; the robot drove a
+    // moment ago, so it re-anchors, keeping the heading, instead of a kidnap
+    db_pose_estimator_conf_t conf     = _conf;
+    conf.q_pos_slip_mm2_per_mm_s      = 0;
+    conf.q_heading_slip_deg2_per_mm_s = 0;
+    const float speeds[]              = { 600, -600 };
+    for (unsigned i = 0; i < 2; i++) {
+        db_pose_estimator_t est;
+        robot_t             r = { .x = 1000, .y = 1000, .theta = 90 * DEG, .seed = 40 + i, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+        _sprint_and_slip(&est, &conf, speeds[i], 40, 0, &r);
+        float sx = 0, sy = 0, px, py;
+        _robot_sensor(&r, 0, &px, &py);
+        bool tracking = db_pose_estimator_sensor(&est, &sx, &sy);
+        CHECK(tracking && est.kidnaps == 0 && est.reanchors == 1, "%+.0f mm/s, no slip noise: re-anchored, not kidnapped, status %d kidnaps %u reanchors %u", speeds[i], est.status, est.kidnaps, est.reanchors);
+        CHECK(hypotf(sx - px, sy - py) < 5.0f, "%+.0f mm/s, no slip noise: on the fixes, %.1f mm off", speeds[i], hypotf(sx - px, sy - py));
+        CHECK(_angle_error_deg(est.theta, r.theta) < 4.0f, "%+.0f mm/s, no slip noise: heading kept, %.1f deg off", speeds[i], _angle_error_deg(est.theta, r.theta));
+    }
+    // With neither, as before the fix, the same stop is taken for a kidnap
+    conf.kidnap_settle_ticks = 0;
+    conf.reanchor_mm         = 0;
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 90 * DEG, .seed = 42, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    _sprint_and_slip(&est, &conf, -600, 40, 0, &r);
+    CHECK(est.kidnaps == 1, "without the guard the stop reads as a kidnap, kidnaps %u", est.kidnaps);
+}
+
+static void test_moved_right_after_driving(void) {
+    // Carried 150 mm the moment it stopped: too far to be slip, so still a kidnap
+    db_pose_estimator_t est;
+    robot_t             r   = { .x = 1000, .y = 1000, .theta = 0, .seed = 44, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    int32_t             run = (int32_t)lroundf(300.0f * 0.01f / DB_MM_PER_COUNT);
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 1);
+    _run(&est, &r, run, run, 50, 1, LH2_NOISE_SD_MM);
+    _run(&est, &r, 0, 0, 5, 1, LH2_NOISE_SD_MM);
+    r.x += 150;
+    _run(&est, &r, 0, 0, 45, 1, LH2_NOISE_SD_MM);
+    CHECK(est.kidnaps == 1 && est.reanchors == 0, "a 150 mm move right after driving is a kidnap, kidnaps %u reanchors %u", est.kidnaps, est.reanchors);
 }
 
 static void test_turn_noise_grows_with_turn_speed(void) {
@@ -567,6 +721,10 @@ int main(void) {
     test_occlusion_keeps_heading();
     test_fix_age_compensated();
     test_noise_scales_with_distance();
+    test_slip_noise_on_hard_stop();
+    test_hard_stop_slip_is_not_a_kidnap();
+    test_reanchor_after_driving();
+    test_moved_right_after_driving();
     test_turn_noise_grows_with_turn_speed();
     test_seed_carried_to_present();
     test_chain_survives_outlier();

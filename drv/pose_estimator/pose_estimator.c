@@ -64,7 +64,7 @@ static void _travel_recent(const db_pose_estimator_t *est, uint32_t age, float *
 }
 
 /// Moves the pose and its covariance over one odometry step
-static void _propagate(db_pose_estimator_t *est, float d, float dtheta, float q_theta) {
+static void _propagate(db_pose_estimator_t *est, float d, float dtheta, float q_theta, float q_pos_slip) {
     float mid = est->theta + 0.5f * dtheta;
     float c   = cosf(mid);
     float s   = sinf(mid);
@@ -87,7 +87,7 @@ static void _propagate(db_pose_estimator_t *est, float d, float dtheta, float q_
         P[i][1] = fp[i][1] + fp[i][2] * f1;
         P[i][2] = fp[i][2];
     }
-    float q_pos = est->conf->q_pos_mm2_per_mm * fabsf(d);
+    float q_pos = est->conf->q_pos_mm2_per_mm * fabsf(d) + q_pos_slip;
     P[0][0] += q_pos;
     P[1][1] += q_pos;
     P[2][2] += q_theta;
@@ -168,14 +168,55 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     est->ticks_since_accept = 0;
     for (uint32_t i = _fix_age(conf); i >= 1; i--) {
         uint32_t slot = _travel_slot(est, i);
-        _propagate(est, est->travel.d[slot], est->travel.dtheta[slot], est->travel.q_theta[slot]);
+        _propagate(est, est->travel.d[slot], est->travel.dtheta[slot], est->travel.q_theta[slot], 0);
     }
     est->seeds++;
     return DB_POSE_ESTIMATOR_SEEDED;
 }
 
-/// Counts a fix the gate rejected while TRACKING toward a kidnap, and on the
-/// last one returns to SEEDING with the chain started on these fixes
+/// Updates the filtered wheel speeds and the standing count over one predict,
+/// and returns the speed change past the deadband, summed over both wheels, mm/s
+static float _wheels_step(db_pose_estimator_t *est, float d_left, float d_right, uint32_t elapsed_ticks) {
+    const db_pose_estimator_conf_t *conf  = est->conf;
+    uint32_t                        n     = elapsed_ticks ? elapsed_ticks : 1U;
+    float                           dt_ms = (float)(n * DB_POSE_ESTIMATOR_TICK_MS);
+    float                           alpha = (conf->speed_tau_ms > 0) ? 1.0f - expf(-dt_ms / conf->speed_tau_ms) : 1.0f;
+    float                           dv_l  = alpha * (d_left * 1000.0f / dt_ms - est->v_left);
+    float                           dv_r  = alpha * (d_right * 1000.0f / dt_ms - est->v_right);
+    est->v_left += dv_l;
+    est->v_right += dv_r;
+    float deadband = conf->slip_deadband_mm_s * (float)n;
+    float change   = fmaxf(0, fabsf(dv_l) - deadband) + fmaxf(0, fabsf(dv_r) - deadband);
+
+    if (fabsf(est->v_left) < conf->still_mm_s && fabsf(est->v_right) < conf->still_mm_s) {
+        est->still_ticks = (UINT32_MAX - est->still_ticks < n) ? UINT32_MAX : est->still_ticks + n;
+    } else {
+        est->still_ticks = 0;
+    }
+    return change;
+}
+
+/// Moves the position onto a fix of the photodiode, keeping the heading and
+/// raising its variance
+static void _reanchor(db_pose_estimator_t *est, float x_mm, float y_mm) {
+    const db_pose_estimator_conf_t *conf = est->conf;
+    float                           lx, ly;
+    _lever(conf, est->theta, &lx, &ly);
+    est->x          = x_mm - lx;
+    est->y          = y_mm - ly;
+    float var_theta = est->P[2][2] + conf->reanchor_heading_var_deg2 * DEG_TO_RAD * DEG_TO_RAD;
+    memset(est->P, 0, sizeof(est->P));
+    est->P[0][0]            = conf->r_pos_mm2;
+    est->P[1][1]            = conf->r_pos_mm2;
+    est->P[2][2]            = var_theta;
+    est->kidnap_count       = 0;
+    est->ticks_since_accept = 0;
+    est->reanchors++;
+}
+
+/// Counts a fix the gate rejected while TRACKING toward a kidnap. On the last
+/// one it returns to SEEDING with the chain started on these fixes, unless the
+/// wheels were turning shortly before and the fixes lie close: then it re-anchors.
 static void _kidnap_check(db_pose_estimator_t *est, float x_mm, float y_mm) {
     const db_pose_estimator_conf_t *conf = est->conf;
     if (conf->kidnap_fixes == 0) {
@@ -188,11 +229,20 @@ static void _kidnap_check(db_pose_estimator_t *est, float x_mm, float y_mm) {
         est->kidnap_y         = y_mm;
         est->kidnap_travel_mm = 0;
         est->kidnap_count     = 1;
+        est->kidnap_settled   = est->still_ticks >= conf->kidnap_settle_ticks;
     } else {
         est->kidnap_count++;
     }
     if (est->kidnap_count < conf->kidnap_fixes) {
         return;
+    }
+    if (!est->kidnap_settled && conf->reanchor_mm > 0) {
+        float lx, ly;
+        _lever(conf, est->theta, &lx, &ly);
+        if (hypotf(x_mm - (est->x + lx), y_mm - (est->y + ly)) <= conf->reanchor_mm) {
+            _reanchor(est, x_mm, y_mm);
+            return;
+        }
     }
     est->status = DB_POSE_ESTIMATOR_SEEDING;
     _chain_start(est, est->kidnap_x, est->kidnap_y);
@@ -334,7 +384,8 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
             turn_scale = ratio;
         }
     }
-    float q_theta = (conf->q_heading_roll_deg2_per_mm * fabsf(d) + conf->q_heading_turn_deg2_per_mm * dd * turn_scale) * DEG_TO_RAD * DEG_TO_RAD;
+    float slip    = _wheels_step(est, d_left, d_right, elapsed_ticks);
+    float q_theta = (conf->q_heading_roll_deg2_per_mm * fabsf(d) + conf->q_heading_turn_deg2_per_mm * dd * turn_scale + conf->q_heading_slip_deg2_per_mm_s * slip) * DEG_TO_RAD * DEG_TO_RAD;
 
     if (est->kidnap_count > 0) {
         est->kidnap_travel_mm += fabsf(d_left) + fabsf(d_right);
@@ -365,7 +416,7 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
     est->travel.head                      = (est->travel.head + 1) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
 
     if (est->status != DB_POSE_ESTIMATOR_SEEDING) {
-        _propagate(est, d, dtheta, q_theta);
+        _propagate(est, d, dtheta, q_theta, conf->q_pos_slip_mm2_per_mm_s * slip);
     }
 }
 
