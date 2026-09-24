@@ -107,6 +107,8 @@ static const db_wheel_control_conf_t _conf = {
     .i_zone            = 50.0f,
     .pwm_max           = 75.0f,
     .pwm_slew_per_tick = 20.0f,
+    .stall_pwm         = 60.0f,
+    .stall_ms          = 500U,
 };
 
 typedef struct {
@@ -117,6 +119,7 @@ typedef struct {
     int   min_pwm;      ///< lowest output
     int   max_pwm;      ///< highest output
     float plant_speed;  ///< plant speed at the end
+    int   stalled;      ///< the loop flagged a stall at some tick
 } run_t;
 
 /// Run the loop against the plant for a number of ticks at one setpoint
@@ -141,6 +144,9 @@ static run_t _run(db_wheel_control_t *w, plant_t *p, float setpoint, int ticks) 
         }
         if (pwm > r.max_pwm) {
             r.max_pwm = pwm;
+        }
+        if (w->stalled) {
+            r.stalled = 1;
         }
         if (signed_measured > r.peak) {
             r.peak = signed_measured;
@@ -283,16 +289,80 @@ static void test_no_windup(void) {
     CHECK(with_i <= without_i + 5, "down from saturation: %d ticks with the integral, %d without; the integral wound up", with_i, without_i);
 }
 
-static void test_blocked_wheel_bounded(void) {
+/// Ticks until the loop flags a held wheel as stalled, -1 if it never does
+static int _ticks_to_stall(db_wheel_control_t *w, plant_t *p, float setpoint, int ticks) {
+    int8_t pwm = (int8_t)w->pwm;
+    db_wheel_control_set_setpoint(w, setpoint);
+    for (int t = 0; t < ticks; t++) {
+        int32_t counts = _plant_step(p, pwm, 1);
+        pwm            = db_wheel_control_step(w, counts, 1);
+        if (w->stalled) {
+            return t + 1;
+        }
+    }
+    return -1;
+}
+
+static void test_stall_coasts(void) {
     db_wheel_control_t w;
     plant_t            p;
     db_wheel_control_init(&w, &_conf);
     _plant_init(&p);
     p.blocked = 1;
-    run_t r   = _run(&w, &p, 400, 500);
-    CHECK(r.max_pwm <= _conf.pwm_max, "a held wheel stays within the saturation, max %d", r.max_pwm);
-    CHECK(w.ff == _conf.pwm_max, "a held wheel's kick ramps up to the saturation, ff %.1f", w.ff);
-    CHECK(_conf.ki * w.integral <= _conf.pwm_max - w.ff + 1e-3f, "a held wheel's integral is bounded, holds %.1f duty", _conf.ki * w.integral);
+    int ticks = _ticks_to_stall(&w, &p, 400, 200);
+    int limit = (int)(_conf.stall_ms / DB_WHEEL_CONTROL_TICK_MS);
+    CHECK(ticks >= limit && ticks <= limit + 10, "a held wheel stalls after %d ticks forced, took %d", limit, ticks);
+    int8_t pwm = db_wheel_control_step(&w, 0, 1);
+    CHECK(w.stalled && pwm == 0 && !w.brake, "a stalled wheel coasts, got stalled %d duty %d brake %d", w.stalled, pwm, w.brake);
+    CHECK(w.integral == 0 && w.kick_boost == 0, "a stall clears the integral and the kick, holds %.2f and %.2f", w.integral, w.kick_boost);
+    run_t r = _run(&w, &p, 400, 200);
+    CHECK(w.stalled && r.max_pwm == 0 && r.min_pwm == 0, "the same setpoint again keeps coasting, output [%d, %d]", r.min_pwm, r.max_pwm);
+}
+
+static void test_stall_recovers(void) {
+    db_wheel_control_t w;
+    plant_t            p;
+    db_wheel_control_init(&w, &_conf);
+    _plant_init(&p);
+    p.blocked = 1;
+    _ticks_to_stall(&w, &p, 200, 200);
+    CHECK(w.stalled, "a held wheel stalls");
+    p.blocked = 0;
+    run_t r   = _run(&w, &p, 150, 300);
+    CHECK(!w.stalled && fabsf(r.mean_last_s - 150) <= 7.5f, "a new setpoint clears the stall and drives, stalled %d steady %.1f", w.stalled, r.mean_last_s);
+
+    p.blocked = 1;
+    _ticks_to_stall(&w, &p, 250, 200);
+    db_wheel_control_reset(&w);
+    CHECK(!w.stalled, "reset clears a stall");
+}
+
+static void test_no_false_stall(void) {
+    // From rest the kick holds full duty for 20-55 ms before the wheel moves
+    float setpoints[] = { 50, 250, -250, 20, -20 };
+    for (unsigned i = 0; i < sizeof(setpoints) / sizeof(setpoints[0]); i++) {
+        db_wheel_control_t w;
+        plant_t            p;
+        db_wheel_control_init(&w, &_conf);
+        _plant_init(&p);
+        run_t r = _run(&w, &p, setpoints[i], 500);
+        CHECK(!r.stalled, "%.0f mm/s from rest must not stall", setpoints[i]);
+        CHECK(fabsf(r.mean_last_s - setpoints[i]) <= fmaxf(0.05f * fabsf(setpoints[i]), 2.0f), "%.0f mm/s from rest: steady %.1f", setpoints[i], r.mean_last_s);
+    }
+    // More than the wheel can do: saturated, but the counts keep coming
+    db_wheel_control_t w;
+    plant_t            p;
+    db_wheel_control_init(&w, &_conf);
+    _plant_init(&p);
+    run_t r = _run(&w, &p, 700, 300);
+    CHECK(!r.stalled && r.max_pwm == (int)_conf.pwm_max, "a saturated turning wheel must not stall, stalled %d max %d", r.stalled, r.max_pwm);
+    // One count every 6 steps, as a wheel turning at about 15 mm/s reads
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, 15);
+    for (int t = 0; t < 300; t++) {
+        db_wheel_control_step(&w, (t % 6) == 0, 1);
+    }
+    CHECK(!w.stalled, "sparse counts at 15 mm/s must not stall");
 }
 
 static void test_reversal(void) {
@@ -431,7 +501,9 @@ int main(void) {
     test_stop_is_immediate();
     test_stop_brakes_then_releases();
     test_no_windup();
-    test_blocked_wheel_bounded();
+    test_stall_coasts();
+    test_stall_recovers();
+    test_no_false_stall();
     test_reversal();
     test_elapsed_ticks();
     test_counts();

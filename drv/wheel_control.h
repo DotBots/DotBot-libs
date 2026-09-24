@@ -24,6 +24,10 @@
  * that motor until the wheel has gone a stall's worth of steps without a
  * count, then lets it coast.
  *
+ * A wheel held at or above stall_pwm with no counts for stall_ms is stalled:
+ * it outputs zero duty without braking (the motor coasts) until the setpoint
+ * changes or the loop is reset.
+ *
  * No hardware calls, so the module also builds on the host for its tests.
  *
  * @{
@@ -42,15 +46,17 @@
 
 /// Gains and limits, shared by both wheels or given per wheel
 typedef struct {
-    float kp;                 ///< duty per mm/s of speed error
-    float ki;                 ///< duty per mm of accumulated speed error
-    float u_breakaway;        ///< least duty applied to a stalled wheel
-    float kick_ramp;          ///< duty added per step while a wheel stays stalled
-    float u_run;              ///< duty of the running line at zero speed
-    float k_run;              ///< slope of the running line, duty per mm/s
-    float i_zone;             ///< the integral only accumulates while |error| is below this, mm/s
-    float pwm_max;            ///< output saturation, duty
-    float pwm_slew_per_tick;  ///< largest output change in one step, duty
+    float    kp;                 ///< duty per mm/s of speed error
+    float    ki;                 ///< duty per mm of accumulated speed error
+    float    u_breakaway;        ///< least duty applied to a stalled wheel
+    float    kick_ramp;          ///< duty added per step while a wheel stays stalled
+    float    u_run;              ///< duty of the running line at zero speed
+    float    k_run;              ///< slope of the running line, duty per mm/s
+    float    i_zone;             ///< the integral only accumulates while |error| is below this, mm/s
+    float    pwm_max;            ///< output saturation, duty
+    float    pwm_slew_per_tick;  ///< largest output change in one step, duty
+    float    stall_pwm;          ///< |duty| at or above which a wheel without counts is being forced, duty
+    uint32_t stall_ms;           ///< time forced without a count before the wheel is stalled, ms; 0 disables
 } db_wheel_control_conf_t;
 
 /// State of one wheel's loop; the app holds one per wheel
@@ -65,6 +71,8 @@ typedef struct {
     uint32_t                       still_ticks;  ///< consecutive steps without a count, saturating
     float                          kick_boost;   ///< duty the stall ramp has added so far
     bool                           brake;        ///< short the motor instead of applying the duty
+    uint32_t                       forced_ms;    ///< time at or above stall_pwm without a count, ms
+    bool                           stalled;      ///< coasting after a stall, until the setpoint changes
 } db_wheel_control_t;
 
 /// Body motion, the input of the twist mixer
@@ -86,7 +94,7 @@ void db_wheel_control_init(db_wheel_control_t *wheel, const db_wheel_control_con
 /**
  * @brief   Set the target speed
  *
- * A change of sign clears the integral.
+ * A change of sign clears the integral; any change of value clears a stall.
  *
  * @param[in]   wheel       Wheel state
  * @param[in]   mm_per_s    Target speed, positive forward
@@ -94,7 +102,7 @@ void db_wheel_control_init(db_wheel_control_t *wheel, const db_wheel_control_con
 void db_wheel_control_set_setpoint(db_wheel_control_t *wheel, float mm_per_s);
 
 /**
- * @brief   Zero the setpoint, the integral and the output
+ * @brief   Zero the setpoint, the integral and the output, and clear a stall
  *
  * @param[in]   wheel   Wheel state
  */

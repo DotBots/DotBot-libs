@@ -48,11 +48,17 @@ void db_wheel_control_reset(db_wheel_control_t *wheel) {
     wheel->still_ticks = STALL_TICKS;
     wheel->kick_boost  = 0;
     wheel->brake       = false;
+    wheel->forced_ms   = 0;
+    wheel->stalled     = false;
 }
 
 void db_wheel_control_set_setpoint(db_wheel_control_t *wheel, float mm_per_s) {
     if (mm_per_s * wheel->setpoint <= 0) {
         wheel->integral = 0;
+    }
+    if (mm_per_s != wheel->setpoint) {
+        wheel->stalled   = false;
+        wheel->forced_ms = 0;
     }
     wheel->setpoint = mm_per_s;
 }
@@ -74,10 +80,21 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         wheel->still_ticks++;
     }
 
+    // wheel->pwm is the duty applied over the step just measured
+    if (conf->stall_ms > 0 && delta_counts == 0 && fabsf(wheel->pwm) >= conf->stall_pwm) {
+        wheel->forced_ms += elapsed_ticks * DB_WHEEL_CONTROL_TICK_MS;
+        if (wheel->forced_ms >= conf->stall_ms) {
+            wheel->stalled = true;
+        }
+    } else {
+        wheel->forced_ms = 0;
+    }
+
     // A zero setpoint shorts the motor only while the wheel turns: once it has
-    // stopped it coasts, and a wheel pushed afterwards brakes again
+    // stopped it coasts, and a wheel pushed afterwards brakes again. A stalled
+    // wheel coasts
     wheel->brake = (wheel->setpoint == 0) && (wheel->still_ticks < STALL_TICKS);
-    if (wheel->setpoint == 0) {
+    if (wheel->setpoint == 0 || wheel->stalled) {
         wheel->kick_boost = 0;
         wheel->integral   = 0;
         wheel->pwm        = 0;
