@@ -507,6 +507,10 @@ void db_steering_set_target(db_steering_t *steering, const db_steering_target_t 
 }
 
 void db_steering_set_path(db_steering_t *steering, const db_steering_path_t *path) {
+    if (path->count == 0) {
+        db_steering_stop(steering);
+        return;
+    }
     steering->path = *path;
     if (steering->path.count > DB_STEERING_MAX_POINTS) {
         steering->path.count = DB_STEERING_MAX_POINTS;
@@ -590,7 +594,6 @@ void db_steering_stop(db_steering_t *steering) {
     steering->v_mm_s      = 0;
     steering->omega_deg_s = 0;
     steering->has_error   = false;
-    steering->fail        = DB_STEERING_FAIL_NONE;
     _enter(steering, DB_STEERING_IDLE);
 }
 

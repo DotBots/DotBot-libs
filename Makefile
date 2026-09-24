@@ -141,7 +141,7 @@ $(TEST_BUILD_DIR)/test_pose_estimator: tests/test_pose_estimator.c drv/pose_esti
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_pose_estimator.c drv/pose_estimator/pose_estimator.c -lm
 
-$(TEST_BUILD_DIR)/test_steering: tests/test_steering.c drv/steering/steering.c drv/steering.h drv/wheel_control/wheel_control.c drv/wheel_control.h drv/pose_estimator/pose_estimator.c drv/pose_estimator.h drv/geometry.h
+$(TEST_BUILD_DIR)/test_steering: tests/test_steering.c drv/steering/steering.c drv/steering.h drv/protocol.h drv/wheel_control/wheel_control.c drv/wheel_control.h drv/pose_estimator/pose_estimator.c drv/pose_estimator.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_steering.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c -lm
 

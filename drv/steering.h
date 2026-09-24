@@ -27,16 +27,16 @@
  * The photodiode, a lever arm ahead of the axle, is only what LH2 sees.
  *
  * Errors are taken from the pose predicted lookahead_s ahead along the last
- * command, which covers the wheel lag. The arrival test uses the point the robot would stop at if braked
- * now, run-on included.
+ * command, which covers the wheel lag. The arrival test uses the point the
+ * robot would stop at if braked now, run-on included.
  *
  * Within near_mm of the axle, a target behind it is reached by
  * backing up rather than by turning round: the heading error folds into
  * [-90, 90] and the forward speed takes the sign of the along-track error.
  *
  * States: IDLE until a batch is set. NO_HEADING, entered without a heading,
- * spins in place at spin_mm_s for one full turn and on until the pose tracks. ALIGN turns in place until the heading error is
- * below align_exit_deg, DRIVE drives with heading correction and returns to
+ * spins in place at spin_mm_s for one full turn and on until the pose tracks.
+ * ALIGN turns in place until the heading error is below align_exit_deg, DRIVE drives with heading correction and returns to
  * ALIGN above align_enter_deg. FINAL_TURN turns in place to a pose's heading.
  * SETTLE and NUDGE are the precise arrival's rest and correction. ARRIVED
  * latches a stop. HOLD stops while the pose is LOST and resumes once
@@ -341,7 +341,7 @@ typedef struct {
 typedef struct {
     const db_steering_conf_t *conf;               ///< gains, not owned
     db_steering_state_t       state;              ///< current state
-    db_steering_fail_t        fail;               ///< why FAILED, else NONE
+    db_steering_fail_t        fail;               ///< why the last batch FAILED, else NONE
     db_steering_completion_t  completion;         ///< how the batch stands
     db_steering_path_t        path;               ///< the batch
     uint8_t                   index;              ///< point being driven to; count once arrived
@@ -411,7 +411,7 @@ void db_steering_set_target(db_steering_t *steering, const db_steering_target_t 
  * A move already driving carries on driving toward the first point.
  *
  * @param[in]   steering    Steering state
- * @param[in]   path        Batch, copied; count must be 1 to DB_STEERING_MAX_POINTS
+ * @param[in]   path        Batch, copied; count 0 is db_steering_stop(), and points past DB_STEERING_MAX_POINTS are dropped
  */
 void db_steering_set_path(db_steering_t *steering, const db_steering_path_t *path);
 

@@ -299,7 +299,7 @@ static void _sim_run(sim_t *s, uint32_t ticks) {
             db_steering_fix(&s->steering, zx, zy);
         }
         _pose_of(&s->est, &pose);
-        if (db_steering_poll(&s->steering, &pose, &s->out) && s->out.brake) {
+        if (db_steering_poll(&s->steering, &pose, &s->out) && s->steering.state == DB_STEERING_SETTLE) {
             s->settles++;
         }
         if (s->steering.state == DB_STEERING_SETTLE && s->steering.settle_count > 0 && s->first_settle_miss < 0) {
@@ -1011,6 +1011,36 @@ static void test_completion(void) {
     CHECK(s.steering.completion == DB_STEERING_DONE_ABORTED, "a stop in progress: ABORTED, %d", s.steering.completion);
 }
 
+static void test_stop_keeps_the_outcome(void) {
+    // A stop after the batch has ended keeps its status and its reason
+    const float pts[][2] = { { 1000, 900 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 1, 10, 0);
+    _sim_run(&s, 30);
+    s.robot.blocked = 1;
+    _sim_until_done(&s, 1500);
+    CHECK(s.steering.completion == DB_STEERING_DONE_FAILED && s.steering.fail == DB_STEERING_FAIL_PROGRESS, "blocked: FAILED on progress, %d %d", s.steering.completion, s.steering.fail);
+    db_steering_stop(&s.steering);
+    CHECK(s.steering.state == DB_STEERING_IDLE && s.steering.completion == DB_STEERING_DONE_FAILED && s.steering.fail == DB_STEERING_FAIL_PROGRESS,
+          "a stop after failing keeps FAILED and its reason, %d %d", s.steering.completion, s.steering.fail);
+    s.robot.blocked = 0;
+    _path(&s, pts, 1, 10, 0);
+    CHECK(s.steering.completion == DB_STEERING_DONE_IN_PROGRESS && s.steering.fail == DB_STEERING_FAIL_NONE, "a new batch clears the reason, %d %d", s.steering.completion, s.steering.fail);
+}
+
+static void test_empty_path_stops(void) {
+    const float pts[][2] = { { 1000, 900 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 1, 10, 0);
+    _sim_run(&s, 30);
+    _path(&s, pts, 0, 10, 0);
+    _sim_run(&s, 10);
+    CHECK(s.steering.state == DB_STEERING_IDLE && s.steering.completion == DB_STEERING_DONE_ABORTED && !s.out.brake && s.out.left_mm_s == 0 && s.out.right_mm_s == 0,
+          "an empty batch in progress: IDLE, ABORTED, zero setpoints, state %d completion %d", s.steering.state, s.steering.completion);
+}
+
 static void test_failed_mid_path(void) {
     const float pts[][2] = { { 1000, 700 }, { 1000, 900 }, { 1000, 1100 } };
     sim_t       s;
@@ -1184,14 +1214,27 @@ static void test_path_from_wire(void) {
     CHECK(!path.points[0].has_heading && path.points[1].has_heading && path.points[1].heading_deg == -90.0f, "trailer: headings, none and -90");
     CHECK(db_steering_path_from_wire(buf, n - 1, &path, &batch) && batch == 0 && !path.points[1].has_heading, "a trailer cut short is ignored");
 
+    // more points than a batch holds: the first DB_STEERING_MAX_POINTS kept, the trailer still read
+    uint8_t  big[3 + 17 * 8 + 4 + 17 * 2] = { 10, 0, 17 };
+    uint32_t xy[2]                        = { 100, 200 };
+    for (int i = 0; i < 17; i++) {
+        xy[0] = 100U + (uint32_t)i;
+        memcpy(&big[3 + i * 8], xy, sizeof(xy));
+    }
+    uint8_t big_trailer[4] = { 42, 0, 0, 0 };
+    memcpy(&big[3 + 17 * 8], big_trailer, sizeof(big_trailer));
+    for (int i = 0; i < 17; i++) {
+        int16_t h = (int16_t)(100 * i);
+        memcpy(&big[3 + 17 * 8 + 4 + i * 2], &h, sizeof(h));
+    }
+    CHECK(db_steering_path_from_wire(big, sizeof(big), &path, &batch) && path.count == DB_STEERING_MAX_POINTS && batch == 42, "17 points: 16 kept, trailer read, count %d batch %d", path.count, batch);
+    CHECK(path.points[15].x_mm == 115.0f && path.points[15].has_heading && path.points[15].heading_deg == 15.0f, "17 points: the 16th point and its heading, %.0f %.2f", path.points[15].x_mm, path.points[15].heading_deg);
+    CHECK(!db_steering_path_from_wire(big, 3 + 16 * 8, &path, &batch), "17 points declared, 16 sent: refused");
+
     // an empty batch is a stop
     uint8_t stop[4] = { 10, 0, 0, 5 };
     CHECK(db_steering_path_from_wire(stop, sizeof(stop), &path, &batch) && path.count == 0, "count 0: a stop");
     CHECK(!db_steering_path_from_wire(stop, 2, &path, &batch), "no count: refused");
-}
-
-static int s_ok(float mean_short) {
-    return fabsf(mean_short) < 0.6f;
 }
 
 static void test_final_heading_unbiased(void) {
@@ -1212,7 +1255,7 @@ static void test_final_heading_unbiased(void) {
         sum += (turned > 0) ? -e : e;
         worst = fmaxf(worst, fabsf(e));
     }
-    CHECK(s_ok(sum / 8.0f), "final turns stop short on average by %.2f deg, worst %.1f", sum / 8.0f, worst);
+    CHECK(fabsf(sum / 8.0f) < 0.6f, "final turns stop short on average by %.2f deg, worst %.1f", sum / 8.0f, worst);
 }
 
 int main(void) {
@@ -1249,6 +1292,8 @@ int main(void) {
     test_u_turn();
     test_point_behind();
     test_completion();
+    test_stop_keeps_the_outcome();
+    test_empty_path_stops();
     test_failed_mid_path();
     test_retarget_mid_path();
     test_pass_beyond_the_leg();
