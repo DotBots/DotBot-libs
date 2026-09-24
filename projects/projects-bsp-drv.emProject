@@ -663,30 +663,6 @@
       <file file_name="$(ProjectDir)/../../nRF/System/cpu.c" />
     </folder>
   </project>
-  <project Name="01drv_move">
-    <configuration
-      Name="Common"
-      project_dependencies="00bsp_timer(bsp);00drv_move(drv)"
-      project_directory="01drv_move"
-      project_type="Executable" />
-    <folder Name="Setup">
-      <file file_name="$(ProjectDir)/../../nRF/Setup/$(Target)_flash_placement.xml" />
-      <file file_name="$(ProjectDir)/../../nRF/Setup/$(Target)_MemoryMap.xml">
-        <configuration Name="Common" file_type="Memory Map" />
-      </file>
-      <file file_name="../../nRF/Scripts/nRF_Target.js">
-        <configuration Name="Common" file_type="Reset Script" />
-      </file>
-    </folder>
-    <folder Name="Source">
-      <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
-      <file file_name="01drv_move.c" />
-    </folder>
-    <folder Name="System">
-      <file file_name="$(ProjectDir)/../../nRF/System/$(Target)_system_init.c" />
-      <file file_name="$(ProjectDir)/../../nRF/System/cpu.c" />
-    </folder>
-  </project>
   <project Name="01drv_n25q128">
     <configuration
       Name="Common"
@@ -801,6 +777,30 @@
     <folder Name="Source">
       <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
       <file file_name="compressed.h" />
+      <file file_name="main.c" />
+    </folder>
+    <folder Name="System">
+      <file file_name="$(ProjectDir)/../../nRF/System/$(Target)_system_init.c" />
+      <file file_name="$(ProjectDir)/../../nRF/System/cpu.c" />
+    </folder>
+  </project>
+  <project Name="01drv_wheel_control">
+    <configuration
+      Name="Common"
+      project_dependencies="00bsp_dotbot_board(bsp);00bsp_qdec(bsp);00bsp_timer(bsp);00drv_motors(drv);00drv_wheel_control(drv)"
+      project_directory="01drv_wheel_control"
+      project_type="Executable" />
+    <folder Name="Setup">
+      <file file_name="$(ProjectDir)/../../nRF/Setup/$(Target)_flash_placement.xml" />
+      <file file_name="$(ProjectDir)/../../nRF/Setup/$(Target)_MemoryMap.xml">
+        <configuration Name="Common" file_type="Memory Map" />
+      </file>
+      <file file_name="../../nRF/Scripts/nRF_Target.js">
+        <configuration Name="Common" file_type="Reset Script" />
+      </file>
+    </folder>
+    <folder Name="Source">
+      <configuration Name="Common" filter="c;cpp;cxx;cc;h;s;asm;inc" />
       <file file_name="main.c" />
     </folder>
     <folder Name="System">

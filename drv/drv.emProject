@@ -119,15 +119,6 @@
     <file file_name="motors/motors.c" />
     <file file_name="motors.h" />
   </project>
-  <project Name="00drv_move">
-    <configuration
-      Name="Common"
-      project_dependencies="00bsp_dotbot_board(bsp);00bsp_qdec(bsp);00bsp_timer(bsp);00drv_motors(drv)"
-      project_directory="."
-      project_type="Library" />
-    <file file_name="move/move.c" />
-    <file file_name="move.h" />
-  </project>
   <project Name="00drv_n25q128">
     <configuration
       Name="Common"
