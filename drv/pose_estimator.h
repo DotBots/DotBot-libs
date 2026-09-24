@@ -84,8 +84,8 @@
 
 /// Age of a fix when it reaches the estimator, in scheduler ticks. Each fix is
 /// moved forward by the photodiode travel odometry saw over that many predicts.
-/// TODO: estimated at 30 to 50 ms; the app can stamp sweep capture itself.
-#define DB_POSE_ESTIMATOR_FIX_AGE_TICKS (4U)
+/// Measured against the encoders on v3 straights: 1 to 3 ticks, about 2 on average.
+#define DB_POSE_ESTIMATOR_FIX_AGE_TICKS (2U)
 
 /// Longest fix age the estimator can compensate, in predict calls
 #define DB_POSE_ESTIMATOR_FIX_AGE_MAX (8U)

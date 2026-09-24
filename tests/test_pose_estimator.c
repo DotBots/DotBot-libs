@@ -373,15 +373,16 @@ static void test_occlusion_keeps_heading(void) {
 }
 
 static void test_fix_age_compensated(void) {
-    // 300 mm/s straight and a 200 mm/s-per-wheel spin, with every fix
-    // DB_POSE_ESTIMATOR_FIX_AGE_TICKS old
-    int32_t fast = (int32_t)lroundf(300.0f * 0.01f / DB_MM_PER_COUNT);
-    int32_t spin = (int32_t)lroundf(200.0f * 0.01f / DB_MM_PER_COUNT);
+    // 300 mm/s straight and a 200 mm/s-per-wheel spin, with every fix 4 ticks
+    // old, so leaving the age out is large enough to show
+    const uint32_t age  = 4;
+    int32_t        fast = (int32_t)lroundf(300.0f * 0.01f / DB_MM_PER_COUNT);
+    int32_t        spin = (int32_t)lroundf(200.0f * 0.01f / DB_MM_PER_COUNT);
     for (int aged = 1; aged >= 0; aged--) {
         db_pose_estimator_conf_t conf = _conf;
-        conf.fix_age_ticks            = aged ? DB_POSE_ESTIMATOR_FIX_AGE_TICKS : 0;
+        conf.fix_age_ticks            = aged ? age : 0;
         db_pose_estimator_t est;
-        robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 8, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+        robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 8, .fix_age = age };
         db_pose_estimator_init(&est, &conf);
         db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
         _run(&est, &r, fast, fast, 300, 1, LH2_NOISE_SD_MM);
