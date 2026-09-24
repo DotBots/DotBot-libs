@@ -14,7 +14,8 @@
  * sits a lever arm ahead of the axle. That offset is what makes heading
  * observable while the robot turns in place. A fix is some ticks old when it
  * arrives, so it is first moved forward by the photodiode travel odometry saw
- * since.
+ * since; the seed chain likewise lines its odometry up with capture time, and a
+ * seeded pose is carried forward to the present.
  *
  * Process noise grows with distance travelled, never with the call rate, and
  * the heading's share also with how fast the robot turns, since slip is
@@ -144,11 +145,12 @@ typedef struct {
     float    kidnap_still_mm;             ///< wheel travel |d_left| + |d_right| over those fixes still counted as still, mm
 } db_pose_estimator_conf_t;
 
-/// Photodiode travel over the most recent predicts, newest at head - 1
+/// Odometry of the most recent predicts, in every state, newest at head - 1
 typedef struct {
-    float    x[DB_POSE_ESTIMATOR_FIX_AGE_MAX];  ///< mm
-    float    y[DB_POSE_ESTIMATOR_FIX_AGE_MAX];  ///< mm
-    uint32_t head;                              ///< next slot
+    float    d[DB_POSE_ESTIMATOR_FIX_AGE_MAX];        ///< axle midpoint travel, mm
+    float    dtheta[DB_POSE_ESTIMATOR_FIX_AGE_MAX];   ///< rotation, rad
+    float    q_theta[DB_POSE_ESTIMATOR_FIX_AGE_MAX];  ///< heading variance added, rad^2
+    uint32_t head;                                    ///< next slot
 } db_pose_estimator_travel_t;
 
 /// Estimator state
@@ -163,10 +165,10 @@ typedef struct {
     db_pose_estimator_travel_t      travel;              ///< for moving a fix forward by its age
     float                           chain_x;             ///< first fix of the seed chain, mm
     float                           chain_y;             ///< first fix of the seed chain, mm
-    float                           chain_bx;            ///< axle travel since that fix, mm, in the body frame at that fix
-    float                           chain_by;            ///< axle travel since that fix, mm, in the body frame at that fix
-    float                           chain_dtheta;        ///< rotation since that fix, rad
-    float                           chain_var_theta;     ///< heading variance odometry added since that fix, rad^2
+    float                           chain_bx;            ///< axle travel since that fix was captured, mm, in the body frame then
+    float                           chain_by;            ///< axle travel since that fix was captured, mm, in the body frame then
+    float                           chain_dtheta;        ///< rotation since that fix was captured, rad
+    float                           chain_var_theta;     ///< heading variance odometry added since that fix was captured, rad^2
     uint32_t                        chain_count;         ///< fixes in the chain, 0 when none
     float                           kidnap_x;            ///< first of the consecutive rejected fixes, mm
     float                           kidnap_y;            ///< first of the consecutive rejected fixes, mm

@@ -38,8 +38,59 @@ static void _lever(const db_pose_estimator_conf_t *conf, float theta, float *lx,
     *ly     = conf->lever_mm * cosf(a);
 }
 
-static void _travel_clear(db_pose_estimator_t *est) {
-    memset(&est->travel, 0, sizeof(est->travel));
+static uint32_t _fix_age(const db_pose_estimator_conf_t *conf) {
+    return (conf->fix_age_ticks < DB_POSE_ESTIMATOR_FIX_AGE_MAX) ? conf->fix_age_ticks : DB_POSE_ESTIMATOR_FIX_AGE_MAX;
+}
+
+/// Ring slot of the i-th most recent predict, i from 1
+static uint32_t _travel_slot(const db_pose_estimator_t *est, uint32_t i) {
+    return (est->travel.head + DB_POSE_ESTIMATOR_FIX_AGE_MAX - i) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
+}
+
+/// Axle travel and rotation over the last age predicts, integrated back from
+/// the current heading
+static void _travel_recent(const db_pose_estimator_t *est, uint32_t age, float *ax, float *ay, float *dtheta) {
+    float theta = est->theta;
+    *ax         = 0;
+    *ay         = 0;
+    for (uint32_t i = 1; i <= age; i++) {
+        uint32_t slot = _travel_slot(est, i);
+        theta -= est->travel.dtheta[slot];
+        float mid = theta + 0.5f * est->travel.dtheta[slot];
+        *ax += -est->travel.d[slot] * sinf(mid);
+        *ay += est->travel.d[slot] * cosf(mid);
+    }
+    *dtheta = est->theta - theta;
+}
+
+/// Moves the pose and its covariance over one odometry step
+static void _propagate(db_pose_estimator_t *est, float d, float dtheta, float q_theta) {
+    float mid = est->theta + 0.5f * dtheta;
+    float c   = cosf(mid);
+    float s   = sinf(mid);
+    est->x += -d * s;
+    est->y += d * c;
+    est->theta = _wrap(est->theta + dtheta);
+
+    // F = [[1, 0, f0], [0, 1, f1], [0, 0, 1]]
+    float(*P)[3] = est->P;
+    float f0     = -d * c;
+    float f1     = -d * s;
+    float fp[3][3];
+    for (int j = 0; j < 3; j++) {
+        fp[0][j] = P[0][j] + f0 * P[2][j];
+        fp[1][j] = P[1][j] + f1 * P[2][j];
+        fp[2][j] = P[2][j];
+    }
+    for (int i = 0; i < 3; i++) {
+        P[i][0] = fp[i][0] + fp[i][2] * f0;
+        P[i][1] = fp[i][1] + fp[i][2] * f1;
+        P[i][2] = fp[i][2];
+    }
+    float q_pos = est->conf->q_pos_mm2_per_mm * fabsf(d);
+    P[0][0] += q_pos;
+    P[1][1] += q_pos;
+    P[2][2] += q_theta;
 }
 
 static void _chain_start(db_pose_estimator_t *est, float x_mm, float y_mm) {
@@ -53,11 +104,12 @@ static void _chain_start(db_pose_estimator_t *est, float x_mm, float y_mm) {
 }
 
 /// Adds a fix to the seed chain, and sets the pose once the chain can solve for
-/// heading. The fix and the chain's first fix are the photodiode at two times;
-/// odometry gives the axle travel b and rotation dtheta between them in the
-/// body frame of the first, so z - z0 = Rot(theta0) (b + Rot(dtheta) l - l)
+/// heading. The fix and the chain's first fix are the photodiode at two capture
+/// times; odometry gives the axle travel b and rotation dtheta between them in
+/// the body frame of the first, so z - z0 = Rot(theta0) (b + Rot(dtheta) l - l)
 /// with l the lever in the body frame. Lengths on both sides match whatever
 /// theta0 is, which is the consistency test; their angles differ by theta0.
+/// The pose solved is the one at capture, carried forward over the fix age.
 static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_mm, float y_mm) {
     const db_pose_estimator_conf_t *conf = est->conf;
     if (est->chain_count == 0) {
@@ -114,7 +166,10 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     est->chain_count        = 0;
     est->kidnap_count       = 0;
     est->ticks_since_accept = 0;
-    _travel_clear(est);
+    for (uint32_t i = _fix_age(conf); i >= 1; i--) {
+        uint32_t slot = _travel_slot(est, i);
+        _propagate(est, est->travel.d[slot], est->travel.dtheta[slot], est->travel.q_theta[slot]);
+    }
     est->seeds++;
     return DB_POSE_ESTIMATOR_SEEDED;
 }
@@ -152,15 +207,13 @@ static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float 
     const db_pose_estimator_conf_t *conf = est->conf;
     float(*P)[3]                         = est->P;
 
-    uint32_t age = (conf->fix_age_ticks < DB_POSE_ESTIMATOR_FIX_AGE_MAX) ? conf->fix_age_ticks : DB_POSE_ESTIMATOR_FIX_AGE_MAX;
-    for (uint32_t i = 1; i <= age; i++) {
-        uint32_t slot = (est->travel.head + DB_POSE_ESTIMATOR_FIX_AGE_MAX - i) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
-        x_mm += est->travel.x[slot];
-        y_mm += est->travel.y[slot];
-    }
-
-    float lx, ly;
+    float ax, ay, dtheta, lx0, ly0, lx, ly;
+    _travel_recent(est, _fix_age(conf), &ax, &ay, &dtheta);
+    _lever(conf, est->theta - dtheta, &lx0, &ly0);
     _lever(conf, est->theta, &lx, &ly);
+    x_mm += ax + lx - lx0;
+    y_mm += ay + ly - ly0;
+
     float y0 = x_mm - (est->x + lx);
     float y1 = y_mm - (est->y + ly);
 
@@ -250,7 +303,6 @@ void db_pose_estimator_seed(db_pose_estimator_t *est, float x_mm, float y_mm, fl
     est->chain_count        = 0;
     est->kidnap_count       = 0;
     est->ticks_since_accept = 0;
-    _travel_clear(est);
 }
 
 void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, int32_t counts_right, uint32_t elapsed_ticks) {
@@ -283,54 +335,38 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
         }
     }
     float q_theta = (conf->q_heading_roll_deg2_per_mm * fabsf(d) + conf->q_heading_turn_deg2_per_mm * dd * turn_scale) * DEG_TO_RAD * DEG_TO_RAD;
-    float q_pos   = conf->q_pos_mm2_per_mm * fabsf(d);
 
     if (est->kidnap_count > 0) {
         est->kidnap_travel_mm += fabsf(d_left) + fabsf(d_right);
     }
 
+    // The chain runs fix_age behind, on the step leaving the age window, so its
+    // odometry spans the capture times of its fixes
+    uint32_t age        = _fix_age(conf);
+    float    old_d      = d;
+    float    old_dtheta = dtheta;
+    float    old_q      = q_theta;
+    if (age > 0) {
+        uint32_t slot = _travel_slot(est, age);
+        old_d         = est->travel.d[slot];
+        old_dtheta    = est->travel.dtheta[slot];
+        old_q         = est->travel.q_theta[slot];
+    }
     if (est->status != DB_POSE_ESTIMATOR_TRACKING && est->chain_count > 0) {
-        float mid = est->chain_dtheta + 0.5f * dtheta;
-        est->chain_bx += -d * sinf(mid);
-        est->chain_by += d * cosf(mid);
-        est->chain_dtheta += dtheta;
-        est->chain_var_theta += q_theta;
+        float mid = est->chain_dtheta + 0.5f * old_dtheta;
+        est->chain_bx += -old_d * sinf(mid);
+        est->chain_by += old_d * cosf(mid);
+        est->chain_dtheta += old_dtheta;
+        est->chain_var_theta += old_q;
     }
-    if (est->status == DB_POSE_ESTIMATOR_SEEDING) {
-        return;
-    }
+    est->travel.d[est->travel.head]       = d;
+    est->travel.dtheta[est->travel.head]  = dtheta;
+    est->travel.q_theta[est->travel.head] = q_theta;
+    est->travel.head                      = (est->travel.head + 1) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
 
-    float lx0, ly0, lx1, ly1;
-    _lever(conf, est->theta, &lx0, &ly0);
-    float mid = est->theta + 0.5f * dtheta;
-    float c   = cosf(mid);
-    float s   = sinf(mid);
-    est->x += -d * s;
-    est->y += d * c;
-    est->theta = _wrap(est->theta + dtheta);
-    _lever(conf, est->theta, &lx1, &ly1);
-    est->travel.x[est->travel.head] = -d * s + lx1 - lx0;
-    est->travel.y[est->travel.head] = d * c + ly1 - ly0;
-    est->travel.head                = (est->travel.head + 1) % DB_POSE_ESTIMATOR_FIX_AGE_MAX;
-
-    // F = [[1, 0, f0], [0, 1, f1], [0, 0, 1]]
-    float(*P)[3] = est->P;
-    float f0     = -d * c;
-    float f1     = -d * s;
-    float fp[3][3];
-    for (int j = 0; j < 3; j++) {
-        fp[0][j] = P[0][j] + f0 * P[2][j];
-        fp[1][j] = P[1][j] + f1 * P[2][j];
-        fp[2][j] = P[2][j];
+    if (est->status != DB_POSE_ESTIMATOR_SEEDING) {
+        _propagate(est, d, dtheta, q_theta);
     }
-    for (int i = 0; i < 3; i++) {
-        P[i][0] = fp[i][0] + fp[i][2] * f0;
-        P[i][1] = fp[i][1] + fp[i][2] * f1;
-        P[i][2] = fp[i][2];
-    }
-    P[0][0] += q_pos;
-    P[1][1] += q_pos;
-    P[2][2] += q_theta;
 }
 
 db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, float x_mm, float y_mm) {

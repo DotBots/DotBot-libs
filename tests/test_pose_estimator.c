@@ -459,6 +459,32 @@ static void test_turn_noise_grows_with_turn_speed(void) {
     CHECK(c.P[2][2] > 1.5f * b.P[2][2], "above it, faster turning adds more heading noise: %.6g against %.6g", c.P[2][2], b.P[2][2]);
 }
 
+static void test_seed_carried_to_present(void) {
+    // A chain seeds from fixes DB_POSE_ESTIMATOR_FIX_AGE_TICKS old; the pose it
+    // sets is the present one, not the one at capture
+    int32_t fast = (int32_t)lroundf(300.0f * 0.01f / DB_MM_PER_COUNT);
+    int32_t spin = (int32_t)lroundf(200.0f * 0.01f / DB_MM_PER_COUNT);
+    for (int spinning = 0; spinning <= 1; spinning++) {
+        db_pose_estimator_t est;
+        robot_t             r  = { .x = 1000, .y = 1000, .theta = 30 * DEG, .seed = 11, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+        int32_t             cl = spinning ? spin : fast;
+        int32_t             cr = spinning ? -spin : fast;
+        db_pose_estimator_init(&est, &_conf);
+        for (uint32_t t = 1; t <= 50 * TICKS_PER_FIX && est.seeds == 0; t++) {
+            _robot_step(&r, cl, cr);
+            db_pose_estimator_predict(&est, cl, cr, 1);
+            if ((t % TICKS_PER_FIX) == 0) {
+                float zx, zy;
+                _robot_sensor(&r, 0, &zx, &zy);
+                db_pose_estimator_update(&est, zx, zy);
+            }
+        }
+        CHECK(est.seeds == 1, "%s seeds, seeds %u", spinning ? "a spin" : "a straight", est.seeds);
+        CHECK(hypotf(est.x - r.x, est.y - r.y) < 0.5f, "%s seeds the present axle, %.2f mm off", spinning ? "a spin" : "a straight", hypotf(est.x - r.x, est.y - r.y));
+        CHECK(_angle_error_deg(est.theta, r.theta) < 0.5f, "%s seeds the present heading, %.2f deg off", spinning ? "a spin" : "a straight", _angle_error_deg(est.theta, r.theta));
+    }
+}
+
 static void test_covariance_stays_positive_definite(void) {
     // An hour at rest at 10 Hz: fixes shrink P toward rank 1, which the
     // non-Joseph update let go indefinite in float32
@@ -503,6 +529,7 @@ int main(void) {
     test_fix_age_compensated();
     test_noise_scales_with_distance();
     test_turn_noise_grows_with_turn_speed();
+    test_seed_carried_to_present();
     test_covariance_stays_positive_definite();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
