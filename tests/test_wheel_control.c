@@ -112,7 +112,7 @@ static const db_wheel_control_conf_t _conf_model = {
     .stall_ms          = 500U,
 };
 
-/// Full duty and no slew limit; keep in step with apps-sandbox/dotbot-next in DotBot-firmware
+/// Full duty and no slew limit; keep in step with apps-sandbox/dotbot in DotBot-firmware
 static const db_wheel_control_conf_t _conf_shipped = {
     .kp                = 0.52f,
     .ki                = 5.2f,
@@ -584,6 +584,87 @@ static void test_reset_mid_motion(void) {
     CHECK(fabsf(r.mean_last_s - 150) <= 7.5f, "after a reset the loop drives again, steady %.1f", r.mean_last_s);
 }
 
+/// Drive a goal on two modelled wheels until both stand, return the final distances
+static void _run_goal(db_wheel_goal_t *goal, float *left_mm, float *right_mm) {
+    db_wheel_control_t wl;
+    db_wheel_control_t wr;
+    plant_t            pl;
+    plant_t            pr;
+    db_wheel_control_init(&wl, &_conf);
+    db_wheel_control_init(&wr, &_conf);
+    _plant_init(&pl);
+    _plant_init(&pr);
+    int32_t dl    = 0;
+    int32_t dr    = 0;
+    int     still = 0;
+    for (int t = 0; t < 2000 && still < 20; t++) {
+        float sl;
+        float sr;
+        db_wheel_goal_step(goal, dl, dr, &sl, &sr);
+        db_wheel_control_set_setpoint(&wl, sl);
+        db_wheel_control_set_setpoint(&wr, sr);
+        int8_t ul = db_wheel_control_step(&wl, dl, 1);
+        int8_t ur = db_wheel_control_step(&wr, dr, 1);
+        pl.brake  = wl.brake;
+        pr.brake  = wr.brake;
+        dl        = _plant_step(&pl, ul, 1);
+        dr        = _plant_step(&pr, ur, 1);
+        still     = (!goal->active && pl.speed == 0 && pr.speed == 0) ? still + 1 : 0;
+    }
+    float sl;
+    float sr;
+    db_wheel_goal_step(goal, dl, dr, &sl, &sr);
+    *left_mm  = goal->travelled_left_mm;
+    *right_mm = goal->travelled_right_mm;
+}
+
+static void test_goal_straight(float distance) {
+    db_wheel_goal_t goal;
+    float           left;
+    float           right;
+    db_wheel_goal_straight(&goal, distance, 150);
+    CHECK(goal.active, "a straight goal of %.0f mm starts", distance);
+    _run_goal(&goal, &left, &right);
+    CHECK(!goal.active, "a straight goal of %.0f mm arrives", distance);
+    CHECK(fabsf(left - distance) <= 10 && fabsf(right - distance) <= 10, "a straight goal of %.0f mm ends within 10 mm, got %.1f / %.1f", distance, left, right);
+}
+
+static void test_goal_turn(void) {
+    db_wheel_goal_t goal;
+    float           left;
+    float           right;
+    float           arc = 90.0f * (float)M_PI / 180.0f * DB_TRACK_EFFECTIVE / 2.0f;
+    db_wheel_goal_turn(&goal, 90, 100);
+    CHECK(goal.target_left_mm > 0 && goal.target_right_mm < 0, "a clockwise turn drives the left wheel forward");
+    _run_goal(&goal, &left, &right);
+    CHECK(fabsf(left - arc) <= 8 && fabsf(right + arc) <= 8, "a 90 degree turn runs each wheel %.1f mm within 8, got %.1f / %.1f", arc, left, right);
+}
+
+static void test_goal_setpoints(void) {
+    db_wheel_goal_t goal;
+    float           sl;
+    float           sr;
+    db_wheel_goal_start(&goal, -50, 100, 200);
+    CHECK(db_wheel_goal_step(&goal, 0, 0, &sl, &sr), "a goal drives from its first step");
+    CHECK(sl == -100 && sr == 200, "the longer wheel runs at the speed and the other in proportion, got %.1f / %.1f", sl, sr);
+    db_wheel_goal_step(&goal, 0, (int32_t)(95.0f / DB_MM_PER_COUNT), &sl, &sr);
+    CHECK(!goal.active && sl == 0 && sr == 0, "a goal arrives within its run-on and zeroes both setpoints");
+    CHECK(!db_wheel_goal_step(&goal, 0, 0, &sl, &sr) && sl == 0 && sr == 0, "an arrived goal stays stopped");
+    db_wheel_goal_straight(&goal, 100, 100);
+    db_wheel_goal_step(&goal, (int32_t)(-98.0f / DB_MM_PER_COUNT), (int32_t)(-98.0f / DB_MM_PER_COUNT), &sl, &sr);
+    CHECK(goal.active && sl > 0, "travel the wrong way does not count toward the target");
+}
+
+static void test_goal_empty(void) {
+    db_wheel_goal_t goal;
+    float           sl = 1;
+    float           sr = 1;
+    db_wheel_goal_straight(&goal, 0, 100);
+    CHECK(!db_wheel_goal_step(&goal, 0, 0, &sl, &sr) && sl == 0 && sr == 0, "a zero distance drives nothing");
+    db_wheel_goal_straight(&goal, 100, 0);
+    CHECK(!goal.active, "a zero speed drives nothing");
+}
+
 static void _suite(const db_wheel_control_conf_t *conf, const char *name) {
     int failed = _failed;
     _conf      = *conf;
@@ -613,6 +694,11 @@ static void _suite(const db_wheel_control_conf_t *conf, const char *name) {
     test_coasts_near_setpoint();
     test_brake_idle();
     test_reset_mid_motion();
+    test_goal_straight(200);
+    test_goal_straight(-200);
+    test_goal_turn();
+    test_goal_setpoints();
+    test_goal_empty();
     printf("%s gains: %d failed\n", name, _failed - failed);
 }
 
