@@ -28,8 +28,8 @@
  * backing up rather than by turning round: the heading error folds into
  * [-90, 90] and the forward speed takes the sign of the along-track error.
  *
- * States: IDLE until a target is set. NO_HEADING spins in place at spin_mm_s
- * until the pose is tracking. ALIGN turns in place until the heading error is
+ * States: IDLE until a target is set. NO_HEADING, entered without a heading,
+ * spins in place at spin_mm_s for one full turn and on until the pose tracks. ALIGN turns in place until the heading error is
  * below align_exit_deg, DRIVE drives with heading correction and returns to
  * ALIGN above align_enter_deg. FINAL_TURN turns in place to the final heading.
  * ARRIVED latches a stop. HOLD stops while the pose is LOST and resumes once
@@ -114,6 +114,11 @@
 /// position error while driving
 #define DB_STEERING_ARRIVAL_MIN_MM (5.0f)
 
+/// NO_HEADING spin, ticks: one full turn at the spin limit on the 82 mm spin
+/// track, 2 pi x 41 mm / 200 mm/s = 1.29 s. One turn leaves the heading within
+/// about 1 degree at rest, against about 4 at the moment it is first acquired.
+#define DB_STEERING_NO_HEADING_TURN_TICKS (130U)
+
 /// Longest NO_HEADING spin before giving up, ticks: two turns at the spin limit
 #define DB_STEERING_NO_HEADING_TICKS (300U)
 
@@ -177,27 +182,28 @@ typedef struct {
 
 /// Gains and limits; the app holds one, the steering keeps a pointer to it
 typedef struct {
-    float    lever_mm;          ///< axle midpoint to photodiode, mm
-    float    v_max_mm_s;        ///< cruise speed, mm/s
-    float    approach_per_s;    ///< approach profile slope, mm/s per mm
-    float    runon_s;           ///< braking run-on, s of speed
-    float    spin_mm_s;         ///< turn cap, per wheel from the mean, mm/s
-    float    spin_min_mm_s;     ///< least turn in place, per wheel, mm/s
-    float    heading_kp;        ///< deg/s per deg
-    float    heading_kd;        ///< deg/s per deg/s
-    float    align_enter_deg;   ///< DRIVE to ALIGN above this error, deg
-    float    align_exit_deg;    ///< ALIGN to DRIVE below this error, deg
-    float    full_speed_deg;    ///< full approach speed up to this error, deg
-    float    final_tol_deg;     ///< final heading tolerance, deg
-    float    near_mm;           ///< back-up margin beyond the lever arm, mm
-    float    bearing_min_mm;    ///< no bearing steering closer than this, mm
-    float    lookahead_s;       ///< pose prediction, s
-    float    arrival_min_mm;    ///< least arrival threshold, mm
-    uint32_t no_heading_ticks;  ///< NO_HEADING timeout
-    uint32_t turn_ticks;        ///< ALIGN and FINAL_TURN timeout
-    uint32_t progress_ticks;    ///< progress timeout
-    float    progress_mm;       ///< progress that resets it, mm
-    uint32_t hold_ticks;        ///< HOLD timeout
+    float    lever_mm;               ///< axle midpoint to photodiode, mm
+    float    v_max_mm_s;             ///< cruise speed, mm/s
+    float    approach_per_s;         ///< approach profile slope, mm/s per mm
+    float    runon_s;                ///< braking run-on, s of speed
+    float    spin_mm_s;              ///< turn cap, per wheel from the mean, mm/s
+    float    spin_min_mm_s;          ///< least turn in place, per wheel, mm/s
+    float    heading_kp;             ///< deg/s per deg
+    float    heading_kd;             ///< deg/s per deg/s
+    float    align_enter_deg;        ///< DRIVE to ALIGN above this error, deg
+    float    align_exit_deg;         ///< ALIGN to DRIVE below this error, deg
+    float    full_speed_deg;         ///< full approach speed up to this error, deg
+    float    final_tol_deg;          ///< final heading tolerance, deg
+    float    near_mm;                ///< back-up margin beyond the lever arm, mm
+    float    bearing_min_mm;         ///< no bearing steering closer than this, mm
+    float    lookahead_s;            ///< pose prediction, s
+    float    arrival_min_mm;         ///< least arrival threshold, mm
+    uint32_t no_heading_turn_ticks;  ///< NO_HEADING spin, one full turn
+    uint32_t no_heading_ticks;       ///< NO_HEADING timeout
+    uint32_t turn_ticks;             ///< ALIGN and FINAL_TURN timeout
+    uint32_t progress_ticks;         ///< progress timeout
+    float    progress_mm;            ///< progress that resets it, mm
+    uint32_t hold_ticks;             ///< HOLD timeout
 } db_steering_conf_t;
 
 /// Steering state
@@ -213,6 +219,7 @@ typedef struct {
     float                     distance_mm;     ///< last distance of the steered point to its goal
     float                     best_mm;         ///< closest the steered point has been since the timer reset
     uint32_t                  state_ticks;     ///< ticks in the current state
+    bool                      spinning;        ///< NO_HEADING has started its turn
     uint32_t                  progress_ticks;  ///< ticks since best_mm last improved
 } db_steering_t;
 

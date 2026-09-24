@@ -64,6 +64,9 @@ static void _forward(float heading_deg, float *fx, float *fy) {
 }
 
 static void _enter(db_steering_t *steering, db_steering_state_t state) {
+    if (state != steering->state) {
+        steering->spinning = false;
+    }
     steering->state       = state;
     steering->state_ticks = 0;
 }
@@ -242,6 +245,8 @@ void db_steering_init(db_steering_t *steering, const db_steering_conf_t *conf) {
     steering->omega_deg_s = 0;
     steering->has_error   = false;
     steering->distance_mm = 0;
+    steering->spinning    = false;
+    steering->state       = DB_STEERING_IDLE;
     _reset_progress(steering);
     _enter(steering, DB_STEERING_IDLE);
 }
@@ -305,7 +310,8 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
             _halt(steering, true, out);
             return;
         case DB_STEERING_NO_HEADING:
-            if (pose->status == DB_STEERING_POSE_TRACKING) {
+            if (pose->status == DB_STEERING_POSE_TRACKING && (!steering->spinning || steering->state_ticks >= conf->no_heading_turn_ticks)) {
+                steering->spinning  = false;
                 steering->has_error = false;
                 _enter(steering, DB_STEERING_ALIGN);
                 _move(steering, pose, elapsed_ticks, out);
@@ -321,6 +327,7 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
                 _halt(steering, true, out);
                 return;
             }
+            steering->spinning    = true;
             out->left_mm_s        = conf->spin_mm_s;
             out->right_mm_s       = -conf->spin_mm_s;
             out->brake            = false;
