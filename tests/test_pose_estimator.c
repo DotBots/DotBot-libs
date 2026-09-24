@@ -485,6 +485,45 @@ static void test_seed_carried_to_present(void) {
     }
 }
 
+static void test_chain_survives_outlier(void) {
+    // One wild fix while acquiring restarts the chain; the heading then
+    // acquired carries nothing of it
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1500, .y = 900, .theta = -120 * DEG, .seed = 13, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    _run(&est, &r, 10, 10, 2 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.chain_count == 2, "chaining, status %d count %u", est.status, est.chain_count);
+    float zx, zy;
+    _robot_sensor(&r, 0, &zx, &zy);
+    CHECK(db_pose_estimator_update(&est, zx + 150, zy - 100) == DB_POSE_ESTIMATOR_REJECTED, "a wild fix breaks the chain");
+    _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "seeded after the wild fix, status %d seeds %u", est.status, est.seeds);
+    CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));
+}
+
+static void test_long_carry_times_out(void) {
+    // Carried for longer than the timeout with the wheels still: every fix
+    // moves more than the seed tolerance, so no kidnap; the pose goes LOST,
+    // the heading stays unknown at rest, and motion reseeds it
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 14, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+    _run(&est, &r, 0, 0, 50, 1, LH2_NOISE_SD_MM);
+    for (int i = 0; i < 15; i++) {
+        r.x += 40;
+        r.theta += 6 * DEG;
+        _run(&est, &r, 0, 0, TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    }
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.kidnaps == 0, "a carry longer than the timeout is lost, not kidnapped, status %d kidnaps %u", est.status, est.kidnaps);
+    _run(&est, &r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
+    float h = 0;
+    CHECK(!db_pose_estimator_heading_deg(&est, &h) && est.seeds == 0, "no heading at rest after the carry, status %d", est.status);
+    _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "motion reseeds, status %d seeds %u", est.status, est.seeds);
+    CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));
+}
+
 static void test_covariance_stays_positive_definite(void) {
     // An hour at rest at 10 Hz: fixes shrink P toward rank 1, which the
     // non-Joseph update let go indefinite in float32
@@ -530,6 +569,8 @@ int main(void) {
     test_noise_scales_with_distance();
     test_turn_noise_grows_with_turn_speed();
     test_seed_carried_to_present();
+    test_chain_survives_outlier();
+    test_long_carry_times_out();
     test_covariance_stays_positive_definite();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
