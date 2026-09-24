@@ -13,9 +13,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "geometry.h"
 #include "pose_estimator.h"
+#include "protocol.h"
 #include "steering.h"
 #include "wheel_control.h"
 
@@ -81,6 +83,14 @@ static const db_steering_conf_t _conf = {
     .bearing_min_mm        = DB_STEERING_BEARING_MIN_MM,
     .lookahead_s           = DB_STEERING_LOOKAHEAD_S,
     .arrival_min_mm        = DB_STEERING_ARRIVAL_MIN_MM,
+    .precise_min_mm        = DB_STEERING_PRECISE_MIN_MM,
+    .pass_mm               = DB_STEERING_PASS_MM,
+    .creep_mm_s            = DB_STEERING_CREEP_MM_S,
+    .settle_skip_ticks     = DB_STEERING_SETTLE_SKIP_TICKS,
+    .settle_fixes          = DB_STEERING_SETTLE_FIXES,
+    .settle_ticks          = DB_STEERING_SETTLE_TICKS,
+    .settle_nudges         = DB_STEERING_SETTLE_NUDGES,
+    .nudge_ticks           = DB_STEERING_NUDGE_TICKS,
     .no_heading_turn_ticks = DB_STEERING_NO_HEADING_TURN_TICKS,
     .no_heading_ticks      = DB_STEERING_NO_HEADING_TICKS,
     .turn_ticks            = DB_STEERING_TURN_TICKS,
@@ -120,6 +130,7 @@ typedef struct {
     pose_t   hist[HISTORY];  ///< pose at each recent tick
     int      fixes;          ///< LH2 on
     int      blocked;        ///< wheels held still whatever the setpoint
+    float    noise_mm;       ///< LH2 noise, sd
 } robot_t;
 
 typedef struct {
@@ -127,11 +138,17 @@ typedef struct {
     db_pose_estimator_t  est;
     db_steering_t        steering;
     db_steering_output_t out;
-    float                max_diff;      ///< largest |left - right| / 2 ever commanded, mm/s
-    float                max_wheel;     ///< largest |wheel| ever commanded, mm/s
-    uint32_t             arrived_tick;  ///< tick ARRIVED was first seen, 0 before
-    int                  pivot_steps;   ///< outer steps commanded in place while turning
-    int                  steps;         ///< outer steps
+    float                max_diff;           ///< largest |left - right| / 2 ever commanded, mm/s
+    float                max_wheel;          ///< largest |wheel| ever commanded, mm/s
+    uint32_t             arrived_tick;       ///< tick ARRIVED was first seen, 0 before
+    int                  pivot_steps;        ///< outer steps commanded in place while turning
+    int                  steps;              ///< outer steps
+    float                pass_v_min;         ///< slowest commanded forward speed at an index change, mm/s
+    float                approach_v_min;     ///< slowest commanded forward speed the step before an index change, mm/s
+    float                last_v;             ///< commanded forward speed at the last step, mm/s
+    float                first_settle_miss;  ///< true axle to the current point along the heading, at rest in the first SETTLE, mm
+    float                max_v;              ///< fastest commanded forward speed, mm/s
+    int                  settles;            ///< SETTLE entries
 } sim_t;
 
 static float _noise(robot_t *r) {
@@ -183,10 +200,6 @@ static void _photodiode(float x, float y, float theta, float *px, float *py) {
     *py = y + DB_LH2_LEVER_ARM_EFFECTIVE * cosf(theta);
 }
 
-static void _true_photodiode(const sim_t *s, float *px, float *py) {
-    _photodiode(s->robot.x, s->robot.y, s->robot.theta, px, py);
-}
-
 static float _true_heading_deg(const sim_t *s) {
     float h = fmodf(s->robot.theta / DEG, 360.0f);
     if (h >= 180.0f) {
@@ -209,13 +222,17 @@ static float _angle_diff(float a, float b) {
 
 /// A robot at a pose, with the estimator already tracking it there unless seeded is 0
 static void _sim_init(sim_t *s, float x, float y, float heading_deg, int seeded, float tau_s) {
-    *s             = (sim_t){ 0 };
-    s->robot.x     = x;
-    s->robot.y     = y;
-    s->robot.theta = heading_deg * DEG;
-    s->robot.tau_s = tau_s;
-    s->robot.seed  = 12345U;
-    s->robot.fixes = 1;
+    *s                   = (sim_t){ 0 };
+    s->robot.x           = x;
+    s->robot.y           = y;
+    s->robot.theta       = heading_deg * DEG;
+    s->robot.tau_s       = tau_s;
+    s->robot.seed        = 12345U;
+    s->robot.fixes       = 1;
+    s->robot.noise_mm    = 1.0f;
+    s->pass_v_min        = INFINITY;
+    s->approach_v_min    = INFINITY;
+    s->first_settle_miss = -1;
     for (uint32_t i = 0; i < HISTORY; i++) {
         s->robot.hist[i] = (pose_t){ x, y, s->robot.theta };
     }
@@ -234,22 +251,34 @@ static void _pose_of(const db_pose_estimator_t *est, db_steering_pose_t *pose) {
 }
 
 /// Run for a number of ticks: the robot and the estimator every tick, the
-/// steering every DB_STEERING_PERIOD_TICKS
+/// steering every DB_STEERING_PERIOD_TICKS and its poll every tick, as in the app
 static void _sim_run(sim_t *s, uint32_t ticks) {
     for (uint32_t t = 0; t < ticks; t++) {
-        robot_t *r = &s->robot;
+        robot_t           *r = &s->robot;
+        db_steering_pose_t pose;
         if (r->ticks % DB_STEERING_PERIOD_TICKS == 0) {
-            db_steering_pose_t pose;
+            db_steering_state_t before = s->steering.state;
+            uint8_t             index  = s->steering.index;
             _pose_of(&s->est, &pose);
             db_steering_step(&s->steering, &pose, DB_STEERING_PERIOD_TICKS, &s->out);
             s->steps++;
             if (!s->out.brake) {
                 float diff   = fabsf(s->out.left_mm_s - s->out.right_mm_s) / 2.0f;
+                float v      = (s->out.left_mm_s + s->out.right_mm_s) / 2.0f;
                 s->max_diff  = fmaxf(s->max_diff, diff);
                 s->max_wheel = fmaxf(s->max_wheel, fmaxf(fabsf(s->out.left_mm_s), fabsf(s->out.right_mm_s)));
+                s->max_v     = fmaxf(s->max_v, fabsf(v));
                 if (diff > 1.0f && fabsf(s->out.left_mm_s + s->out.right_mm_s) < 1e-3f) {
                     s->pivot_steps++;
                 }
+                if (s->steering.index != index && s->steering.index < s->steering.path.count) {
+                    s->pass_v_min     = fminf(s->pass_v_min, fabsf(v));
+                    s->approach_v_min = fminf(s->approach_v_min, fabsf(s->last_v));
+                }
+            }
+            s->last_v = s->out.brake ? 0 : (s->out.left_mm_s + s->out.right_mm_s) / 2.0f;
+            if (s->steering.state == DB_STEERING_SETTLE && before != DB_STEERING_SETTLE) {
+                s->settles++;
             }
             if (s->steering.state == DB_STEERING_ARRIVED && s->arrived_tick == 0) {
                 s->arrived_tick = r->ticks;
@@ -264,7 +293,17 @@ static void _sim_run(sim_t *s, uint32_t ticks) {
             pose_t p = r->hist[(r->ticks - 1 - FIX_AGE_TICKS) % HISTORY];
             float  zx, zy;
             _photodiode(p.x, p.y, p.theta, &zx, &zy);
-            db_pose_estimator_update(&s->est, zx + _noise(r), zy + _noise(r));
+            zx += r->noise_mm * _noise(r);
+            zy += r->noise_mm * _noise(r);
+            db_pose_estimator_update(&s->est, zx, zy);
+            db_steering_fix(&s->steering, zx, zy);
+        }
+        _pose_of(&s->est, &pose);
+        if (db_steering_poll(&s->steering, &pose, &s->out) && s->out.brake) {
+            s->settles++;
+        }
+        if (s->steering.state == DB_STEERING_SETTLE && s->steering.settle_count > 0 && s->first_settle_miss < 0) {
+            s->first_settle_miss = fabsf(-(s->steering.target.x_mm - r->x) * sinf(r->theta) + (s->steering.target.y_mm - r->y) * cosf(r->theta));
         }
     }
 }
@@ -289,18 +328,15 @@ static void _goto(sim_t *s, float x, float y, float threshold) {
     db_steering_set_target(&s->steering, &target);
 }
 
+/// Distance of the true axle from a point
 static float _miss(const sim_t *s, float x, float y) {
-    float px, py;
-    _true_photodiode(s, &px, &py);
-    return hypotf(px - x, py - y);
+    return hypotf(s->robot.x - x, s->robot.y - y);
 }
 
-/// The robot faces +y from (1000, 500); a target at distance and bearing from its photodiode
+/// The robot faces +y from (1000, 500); a target at distance and bearing from its axle
 static void _target_from(float distance, float bearing_deg, float *x, float *y) {
-    float px, py;
-    _photodiode(1000.0f, 500.0f, 0, &px, &py);
-    *x = px - distance * sinf(bearing_deg * DEG);
-    *y = py + distance * cosf(bearing_deg * DEG);
+    *x = 1000.0f - distance * sinf(bearing_deg * DEG);
+    *y = 500.0f + distance * cosf(bearing_deg * DEG);
 }
 
 //=========================== tests ============================================
@@ -333,7 +369,7 @@ static void test_target_ahead(void) {
 }
 
 static void test_no_overshoot(void) {
-    // Photodiode along the line of approach, tick by tick
+    // Axle along the line of approach, tick by tick
     sim_t s;
     float x, y;
     _sim_init(&s, 1000, 500, 0, 1, 0.05f);
@@ -342,12 +378,10 @@ static void test_no_overshoot(void) {
     float past = -INFINITY;
     for (int t = 0; t < 1200; t++) {
         _sim_run(&s, 1);
-        float px, py;
-        _true_photodiode(&s, &px, &py);
-        past = fmaxf(past, py - y);
+        past = fmaxf(past, s.robot.y - y);
     }
     CHECK(s.steering.state == DB_STEERING_ARRIVED, "800 mm at 300 mm/s: arrived, state %d", s.steering.state);
-    CHECK(past < 5.0f, "the photodiode never passes the target by 5 mm, passed by %.1f", past);
+    CHECK(past < 5.0f, "the axle never passes the target by 5 mm, passed by %.1f", past);
 }
 
 static void test_target_behind_pivots(void) {
@@ -381,8 +415,8 @@ static void test_target_to_the_side(void) {
 }
 
 static void test_very_close_targets(void) {
-    // 25 mm ahead of the photodiode, and 25, 60 and 100 mm behind it
-    const float distances[] = { 25, 25, 60, 100 };
+    // 25 mm ahead of the axle, and 25, 60 and 90 mm behind it
+    const float distances[] = { 25, 25, 60, 90 };
     const float bearings[]  = { 0, 180, 180, 180 };
     for (unsigned i = 0; i < 4; i++) {
         sim_t s;
@@ -398,16 +432,14 @@ static void test_very_close_targets(void) {
 }
 
 static void test_near_axle_target_no_pivot(void) {
-    // A target near the axle, a few mm off the heading line: the photodiode
-    // gets there by backing up, not by turning round
+    // A target just behind the axle, a few mm off the heading line: the
+    // robot gets there by backing up, not by turning round
     const float lateral[] = { 2, -3, 4, 4, 5, -6 };
     const float thr[]     = { 5, 10, 10, 5, 5, 5 };
     for (unsigned i = 0; i < 6; i++) {
         sim_t s;
-        float px, py;
         _sim_init(&s, 1000, 500, 0, 1, 0.04f);
-        _true_photodiode(&s, &px, &py);
-        float x = px + lateral[i], y = py - 55.0f;
+        float x = 1000.0f + lateral[i], y = 500.0f - 55.0f;
         _goto(&s, x, y, thr[i]);
         _sim_until_done(&s, 1000);
         CHECK(s.steering.state == DB_STEERING_ARRIVED, "near axle, %.0f mm off the line: arrived, state %d", lateral[i], s.steering.state);
@@ -421,8 +453,8 @@ static void test_near_axle_target_no_pivot(void) {
 }
 
 static void test_overshoot_reverses(void) {
-    // Driving at 200 mm/s with the target already 30 mm behind the photodiode
-    const float behind[] = { 30, 100 };
+    // Driving at 200 mm/s with the target already 30 or 80 mm behind the axle
+    const float behind[] = { 30, 80 };
     for (unsigned i = 0; i < 2; i++) {
         sim_t s;
         float x, y;
@@ -487,7 +519,7 @@ static void test_final_heading(void) {
         CHECK(turned, "final heading %.0f: goes through FINAL_TURN", headings[i]);
         CHECK(s.steering.state == DB_STEERING_ARRIVED, "final heading %.0f: arrived, state %d", headings[i], s.steering.state);
         CHECK(fabsf(_angle_diff(_true_heading_deg(&s), headings[i])) < 5.0f, "final heading %.0f: within 5 deg, true %.1f", headings[i], _true_heading_deg(&s));
-        CHECK(_miss(&s, x, y) < 14.0f, "final heading %.0f: photodiode within 14 mm after the turn, missed by %.1f", headings[i], _miss(&s, x, y));
+        CHECK(hypotf(s.robot.x - x, s.robot.y - y) < 12.0f, "final heading %.0f: axle within 12 mm of the pose after the turn, missed by %.1f", headings[i], hypotf(s.robot.x - x, s.robot.y - y));
     }
 }
 
@@ -694,12 +726,12 @@ static void test_speed_falls_with_heading_error(void) {
 }
 
 static void test_arrival_counts_the_runon(void) {
-    // At cruise the robot runs on 15 mm, so a photodiode 30 mm short of a
+    // At cruise the robot runs on 15 mm, so an axle 30 mm short of a
     // 20 mm threshold is not arrived and one 10 mm short is
     db_steering_t        steering;
     db_steering_output_t out;
     _cruising(&steering, &out);
-    float              axle_y = 1000.0f - DB_LH2_LEVER_ARM_EFFECTIVE - 20.0f - 30.0f;
+    float              axle_y = 1000.0f - 20.0f - 30.0f;
     db_steering_pose_t pose   = { .status = DB_STEERING_POSE_TRACKING, .x_mm = 1000, .y_mm = axle_y, .heading_deg = 0 };
     steering.v_mm_s           = DB_STEERING_V_MAX_MM_S;
     db_steering_step(&steering, &pose, 10, &out);
@@ -783,8 +815,8 @@ static void test_pivot_without_floor(void) {
     // A small residual error in place still turns, at the least useful rate
     target.has_final_heading = true;
     target.final_heading_deg = 4.0f;
-    target.x_mm              = 1000.0f - DB_LH2_LEVER_ARM_EFFECTIVE * sinf(4.0f * DEG);
-    target.y_mm              = 500.0f + DB_LH2_LEVER_ARM_EFFECTIVE * cosf(4.0f * DEG);
+    target.x_mm              = 1000.0f;
+    target.y_mm              = 500.0f;
     db_steering_init(&steering, &_conf);
     db_steering_set_target(&steering, &target);
     db_steering_step(&steering, &pose, 10, &out);
@@ -802,6 +834,360 @@ static void test_stop_goes_idle(void) {
     db_steering_stop(&s.steering);
     _sim_run(&s, 10);
     CHECK(s.steering.state == DB_STEERING_IDLE && s.out.left_mm_s == 0 && s.out.right_mm_s == 0 && !s.out.brake, "stop: IDLE, zero setpoints, no latched brake");
+}
+
+//=========================== batches ==========================================
+
+/// Start a batch of points (x, y), none with a heading
+static void _path(sim_t *s, const float pts[][2], int n, float threshold, float pass) {
+    db_steering_path_t path = { .count = (uint8_t)n, .threshold_mm = threshold, .pass_mm = pass };
+    for (int i = 0; i < n; i++) {
+        path.points[i].x_mm = pts[i][0];
+        path.points[i].y_mm = pts[i][1];
+    }
+    db_steering_set_path(&s->steering, &path);
+}
+
+static float _segment_distance(float x, float y, float ax, float ay, float bx, float by) {
+    float ux = bx - ax, uy = by - ay;
+    float len2 = ux * ux + uy * uy;
+    float t    = (len2 > 0) ? ((x - ax) * ux + (y - ay) * uy) / len2 : 0;
+    t          = (t < 0) ? 0 : ((t > 1) ? 1 : t);
+    return hypotf(x - ax - t * ux, y - ay - t * uy);
+}
+
+/// What a batch run did
+typedef struct {
+    uint32_t ticks;           ///< ticks until the steering stopped
+    float    worst_off_path;  ///< farthest the true axle strayed from the polyline, mm
+    int      early_brakes;    ///< steps braked before the last point
+    uint8_t  indices[64];     ///< the index at each change
+    int      n_indices;       ///< changes recorded
+} run_t;
+
+/// Run a batch from where the robot stands to its end, measuring the true axle
+/// against the polyline from the start through every point
+static run_t _run_path(sim_t *s, const float pts[][2], int n, uint32_t max_ticks) {
+    run_t r  = { 0 };
+    float x0 = s->robot.x, y0 = s->robot.y;
+    r.indices[r.n_indices++] = s->steering.index;
+    while (r.ticks < max_ticks && db_steering_active(&s->steering)) {
+        _sim_run(s, 1);
+        r.ticks++;
+        float best = hypotf(s->robot.x - x0, s->robot.y - y0);
+        float ax = x0, ay = y0;
+        for (int i = 0; i < n; i++) {
+            best = fminf(best, _segment_distance(s->robot.x, s->robot.y, ax, ay, pts[i][0], pts[i][1]));
+            ax   = pts[i][0];
+            ay   = pts[i][1];
+        }
+        r.worst_off_path = fmaxf(r.worst_off_path, best);
+        if (s->out.brake && s->steering.index + 1U < s->steering.path.count) {
+            r.early_brakes++;
+        }
+        if (s->steering.index != r.indices[r.n_indices - 1] && r.n_indices < 64) {
+            r.indices[r.n_indices++] = s->steering.index;
+        }
+    }
+    _sim_run(s, 50);
+    return r;
+}
+
+static int _indices_count_up(const run_t *r, int count) {
+    for (int i = 0; i < r->n_indices; i++) {
+        if (r->indices[i] != i) {
+            return 0;
+        }
+    }
+    return r->n_indices == count + 1;
+}
+
+static void test_square(void) {
+    const float pts[][2] = { { 1000, 800 }, { 1300, 800 }, { 1300, 500 }, { 1000, 500 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 4, 10, 20);
+    run_t r = _run_path(&s, pts, 4, 2000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && s.steering.completion == DB_STEERING_DONE_ARRIVED, "square: arrived, state %d", s.steering.state);
+    CHECK(_miss(&s, 1000, 500) < 12.0f, "square: axle within 12 mm of the last point, missed by %.1f", _miss(&s, 1000, 500));
+    CHECK(_indices_count_up(&r, 4), "square: index 0, 1, 2, 3 then 4, %d changes", r.n_indices);
+    CHECK(r.early_brakes == 0, "square: no brake before the last point, %d steps", r.early_brakes);
+    CHECK(s.pivot_steps > 0, "square: turns in place at the 90 degree corners, %d pivot steps", s.pivot_steps);
+    CHECK(r.worst_off_path < 25.0f, "square: axle within 25 mm of the polyline, %.1f", r.worst_off_path);
+    CHECK(r.ticks < 800, "square: 1.2 m in under 8 s, %u ticks", r.ticks);
+}
+
+static void test_zigzag(void) {
+    const float pts[][2] = { { 1100, 700 }, { 900, 900 }, { 1100, 1100 }, { 900, 1300 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 4, 10, 20);
+    run_t r = _run_path(&s, pts, 4, 2500);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "zigzag: arrived, state %d", s.steering.state);
+    CHECK(_miss(&s, 900, 1300) < 12.0f, "zigzag: within 12 mm of the last point, missed by %.1f", _miss(&s, 900, 1300));
+    CHECK(_indices_count_up(&r, 4), "zigzag: index counts up, %d changes", r.n_indices);
+    CHECK(r.early_brakes == 0, "zigzag: no brake before the last point, %d", r.early_brakes);
+    CHECK(r.worst_off_path < 30.0f, "zigzag: axle within 30 mm of the polyline, %.1f", r.worst_off_path);
+}
+
+static void test_gentle_curve_keeps_speed(void) {
+    // 10 degrees of turn every 150 mm
+    float pts[6][2];
+    float x = 1000, y = 500, h = 0;
+    for (int i = 0; i < 6; i++) {
+        h -= 10.0f;
+        x += -150.0f * sinf(h * DEG);
+        y += 150.0f * cosf(h * DEG);
+        pts[i][0] = x;
+        pts[i][1] = y;
+    }
+    sim_t s;
+    _sim_init(&s, 1000, 500, -10, 1, 0.04f);  // facing the first point
+    _path(&s, (const float(*)[2])pts, 6, 10, 20);
+    run_t r = _run_path(&s, (const float(*)[2])pts, 6, 2000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "curve: arrived, state %d", s.steering.state);
+    CHECK(s.pivot_steps == 0, "curve: never turns in place, %d pivot steps", s.pivot_steps);
+    CHECK(s.pass_v_min > 80.0f, "curve: never slows below 80 mm/s through a point, slowest %.0f", s.pass_v_min);
+    CHECK(r.worst_off_path < 15.0f, "curve: axle within 15 mm of the polyline, %.1f", r.worst_off_path);
+    CHECK(r.ticks < 500, "curve: 900 mm in under 5 s, %u ticks", r.ticks);
+}
+
+static void test_sharp_corner_slows(void) {
+    // The approach to a 90 degree corner keeps no exit speed, one of 10 degrees keeps it all
+    const float square[][2] = { { 1000, 900 }, { 1400, 900 } };
+    const float gentle[][2] = { { 1000, 900 }, { 1000.0f + 400.0f * 0.17365f, 900.0f + 400.0f * 0.98481f } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, square, 2, 10, 20);
+    _run_path(&s, square, 2, 1500);
+    float sharp = s.pass_v_min, sharp_approach = s.approach_v_min;
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "90 degree corner: arrived, state %d", s.steering.state);
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, gentle, 2, 10, 20);
+    _run_path(&s, gentle, 2, 1500);
+    CHECK(sharp < 1.0f && s.pass_v_min > 150.0f, "passes a 90 degree corner slowly and a 10 degree one fast, %.0f and %.0f mm/s", sharp, s.pass_v_min);
+    CHECK(sharp_approach < 120.0f && s.approach_v_min > 250.0f, "slows into the 90 degree corner, not the 10 degree one, %.0f and %.0f mm/s", sharp_approach, s.approach_v_min);
+}
+
+static void test_u_turn(void) {
+    const float pts[][2] = { { 1000, 900 }, { 1000, 500 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 2, 10, 20);
+    run_t r = _run_path(&s, pts, 2, 2000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "U-turn: arrived, state %d", s.steering.state);
+    CHECK(_miss(&s, 1000, 500) < 12.0f, "U-turn: back within 12 mm, missed by %.1f", _miss(&s, 1000, 500));
+    CHECK(fabsf(_angle_diff(_true_heading_deg(&s), 180)) < 15.0f, "U-turn: turned round, heading %.1f", _true_heading_deg(&s));
+    CHECK(r.worst_off_path < 25.0f, "U-turn: axle within 25 mm of the line, %.1f", r.worst_off_path);
+}
+
+static void test_point_behind(void) {
+    // The second point is 60 mm behind the first: backed up to, not turned round for
+    const float pts[][2] = { { 1000, 800 }, { 1000, 740 }, { 1300, 740 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 3, 10, 20);
+    run_t r = _run_path(&s, pts, 3, 2000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "point behind: arrived, state %d", s.steering.state);
+    CHECK(_indices_count_up(&r, 3), "point behind: index counts up, %d changes", r.n_indices);
+    CHECK(_miss(&s, 1300, 740) < 12.0f, "point behind: within 12 mm of the last point, missed by %.1f", _miss(&s, 1300, 740));
+}
+
+static void test_completion(void) {
+    const float pts[][2] = { { 1000, 700 }, { 1000, 900 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    CHECK(s.steering.completion == DB_STEERING_DONE_NONE, "no batch yet: NONE, %d", s.steering.completion);
+    _path(&s, pts, 2, 10, 20);
+    CHECK(s.steering.completion == DB_STEERING_DONE_IN_PROGRESS && s.steering.index == 0, "batch set: IN_PROGRESS at index 0");
+    _sim_until_done(&s, 1500);
+    CHECK(s.steering.completion == DB_STEERING_DONE_ARRIVED && s.steering.index == 2, "ARRIVED with index at the count, %d %d", s.steering.completion, s.steering.index);
+    db_steering_stop(&s.steering);
+    CHECK(s.steering.completion == DB_STEERING_DONE_ARRIVED, "a stop after arriving keeps ARRIVED, %d", s.steering.completion);
+
+    _path(&s, pts, 2, 10, 20);
+    _sim_run(&s, 30);
+    db_steering_stop(&s.steering);
+    CHECK(s.steering.completion == DB_STEERING_DONE_ABORTED, "a stop in progress: ABORTED, %d", s.steering.completion);
+}
+
+static void test_failed_mid_path(void) {
+    const float pts[][2] = { { 1000, 700 }, { 1000, 900 }, { 1000, 1100 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, pts, 3, 10, 20);
+    for (int t = 0; t < 1500 && s.steering.index < 1; t += 10) {
+        _sim_run(&s, 10);
+    }
+    s.robot.blocked = 1;
+    _sim_until_done(&s, 1500);
+    CHECK(s.steering.state == DB_STEERING_FAILED && s.steering.completion == DB_STEERING_DONE_FAILED && s.steering.fail == DB_STEERING_FAIL_PROGRESS,
+          "blocked after the first point: FAILED on progress, state %d fail %d", s.steering.state, s.steering.fail);
+    CHECK(s.steering.index == 1, "and reports the point it was driving to, index %d", s.steering.index);
+    CHECK(s.out.brake, "and brakes");
+}
+
+static void test_retarget_mid_path(void) {
+    const float first[][2]  = { { 1000, 800 }, { 1300, 800 }, { 1300, 500 } };
+    const float second[][2] = { { 1400, 900 }, { 1400, 1100 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    _path(&s, first, 3, 10, 20);
+    for (int t = 0; t < 1500 && s.steering.index < 1; t += 10) {
+        _sim_run(&s, 10);
+    }
+    CHECK(s.steering.index == 1, "first batch under way, index %d", s.steering.index);
+    _path(&s, second, 2, 10, 20);
+    CHECK(s.steering.index == 0 && s.steering.completion == DB_STEERING_DONE_IN_PROGRESS, "a new batch restarts at index 0, %d", s.steering.index);
+    run_t r = _run_path(&s, second, 2, 2000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && _miss(&s, 1400, 1100) < 12.0f, "and arrives at its end, state %d, missed by %.1f", s.steering.state, _miss(&s, 1400, 1100));
+    CHECK(_indices_count_up(&r, 2), "its index counts up, %d changes", r.n_indices);
+}
+
+static void test_pass_beyond_the_leg(void) {
+    // Outside the pass radius but past the point along the leg: passed, not orbited
+    db_steering_t        steering;
+    db_steering_output_t out;
+    db_steering_path_t   path = { .count = 2, .threshold_mm = 10, .pass_mm = 5, .points = { { .x_mm = 1000, .y_mm = 1000 }, { .x_mm = 1500, .y_mm = 1000 } } };
+    db_steering_pose_t   pose = { .status = DB_STEERING_POSE_TRACKING, .x_mm = 1000, .y_mm = 500, .heading_deg = 0 };
+    db_steering_init(&steering, &_conf);
+    db_steering_set_path(&steering, &path);
+    db_steering_step(&steering, &pose, 10, &out);
+    CHECK(steering.index == 0, "starting: index 0, %d", steering.index);
+    pose.x_mm = 1040;
+    pose.y_mm = 995;
+    db_steering_step(&steering, &pose, 10, &out);
+    CHECK(steering.index == 0, "40 mm to the side and short of it: not passed, index %d", steering.index);
+    pose.y_mm = 1010;
+    db_steering_step(&steering, &pose, 10, &out);
+    CHECK(steering.index == 1, "40 mm to the side and past it: passed, index %d", steering.index);
+}
+
+static void test_pose_in_the_middle(void) {
+    // Stop at the first point facing +x (-90), then go on to the second
+    db_steering_path_t path = { .count = 2, .threshold_mm = 10, .points = { { .x_mm = 1000, .y_mm = 800, .has_heading = true, .heading_deg = -90 }, { .x_mm = 1300, .y_mm = 800 } } };
+    sim_t              s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    db_steering_set_path(&s.steering, &path);
+    int   turned             = 0;
+    float at_advance_heading = 999, at_advance_miss = 999;
+    for (int t = 0; t < 2000 && db_steering_active(&s.steering); t += 10) {
+        float heading = _true_heading_deg(&s), miss = _miss(&s, 1000, 800);
+        _sim_run(&s, 10);
+        turned |= s.steering.state == DB_STEERING_FINAL_TURN && s.steering.index == 0;
+        if (turned && s.steering.index == 1 && at_advance_miss > 998) {
+            at_advance_heading = heading;  // as it stood when it went on
+            at_advance_miss    = miss;
+        }
+    }
+    _sim_run(&s, 50);
+    CHECK(turned, "pose mid-batch: turns in place there");
+    CHECK(fabsf(_angle_diff(at_advance_heading, -90)) < 5.0f && at_advance_miss < 12.0f, "and goes on facing it, heading %.1f, axle %.1f mm off", at_advance_heading, at_advance_miss);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && _miss(&s, 1300, 800) < 12.0f, "then arrives at the last point, state %d, missed by %.1f", s.steering.state, _miss(&s, 1300, 800));
+}
+
+static void test_max_speed(void) {
+    const float pts[][2] = { { 1000, 1300 } };
+    sim_t       s;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    db_steering_set_max_speed(&s.steering, 150.0f);
+    _path(&s, pts, 1, 10, 0);
+    _sim_until_done(&s, 2000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && s.max_v <= 150.0f + 0.5f && s.max_v > 140.0f, "a 150 mm/s limit holds, fastest %.0f", s.max_v);
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    db_steering_set_max_speed(&s.steering, 450.0f);
+    db_steering_set_max_speed(&s.steering, 0);
+    _path(&s, pts, 1, 10, 0);
+    _sim_until_done(&s, 2000);
+    CHECK(fabsf(s.max_v - DB_STEERING_V_MAX_MM_S) < 1.0f, "0 restores the default, fastest %.0f", s.max_v);
+}
+
+static void test_precise_arrival(void) {
+    const float thresholds[] = { 3, 2, 1 };
+    const float bearings[]   = { 0, 30, -150 };
+    for (unsigned b = 0; b < 3; b++) {
+        for (unsigned i = 0; i < 3; i++) {
+            sim_t s;
+            float x, y;
+            _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+            s.robot.noise_mm = 0.3f;
+            _target_from(300, bearings[b], &x, &y);
+            _goto(&s, x, y, thresholds[i]);
+            _sim_until_done(&s, 3000);
+            CHECK(s.steering.state == DB_STEERING_ARRIVED, "precise %.0f mm at %.0f: arrived, state %d fail %d, %u corrections", thresholds[i], bearings[b], s.steering.state, s.steering.fail, s.steering.nudges);
+            CHECK(_miss(&s, x, y) <= thresholds[i] + 0.5f, "precise %.0f mm at %.0f: true axle within the threshold, missed by %.2f", thresholds[i], bearings[b], _miss(&s, x, y));
+            CHECK(s.settles >= 1 && s.steering.nudges <= DB_STEERING_SETTLE_NUDGES, "precise %.0f mm at %.0f: settled, %d settles, %u corrections", thresholds[i], bearings[b], s.settles, s.steering.nudges);
+        }
+    }
+}
+
+static void test_precise_creep_stops_on_time(void) {
+    // The poll stops the creep between steps, where a step is 2 mm of it
+    const float distances[] = { 300, 305, 311, 317 };
+    float       worst       = 0;
+    for (unsigned i = 0; i < 4; i++) {
+        sim_t s;
+        float x, y;
+        _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+        s.robot.noise_mm = 0.3f;
+        _target_from(distances[i], 0, &x, &y);
+        _goto(&s, x, y, 2);
+        _sim_until_done(&s, 3000);
+        worst = fmaxf(worst, s.first_settle_miss);
+    }
+    CHECK(worst >= 0 && worst < 2.0f, "the creep's first stop lands within 2 mm along the heading, worst %.2f", worst);
+}
+
+static void test_precise_fails_to_settle(void) {
+    sim_t s;
+    float x, y;
+    _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+    s.robot.noise_mm = 0.3f;
+    _target_from(300, 0, &x, &y);
+    _goto(&s, x, y, 1);
+    for (int t = 0; t < 2000 && s.steering.state != DB_STEERING_SETTLE; t++) {
+        _sim_run(&s, 1);
+    }
+    s.robot.blocked = 1;  // every correction then goes nowhere
+    // push the goal out of reach so the first check fails
+    s.steering.target.y_mm += 5.0f;
+    _sim_until_done(&s, 6000);
+    CHECK(s.steering.state == DB_STEERING_FAILED && s.steering.fail == DB_STEERING_FAIL_SETTLE && s.steering.completion == DB_STEERING_DONE_FAILED,
+          "corrections that go nowhere: FAILED to settle, state %d fail %d", s.steering.state, s.steering.fail);
+    CHECK(s.steering.nudges == DB_STEERING_SETTLE_NUDGES, "after the allowed corrections, %u", s.steering.nudges);
+}
+
+static void test_path_from_wire(void) {
+    uint8_t            buf[1 + 2 + 1 + 16 * 8 + 4 + 16 * 2 + 8] = { 0 };
+    db_steering_path_t path;
+    uint8_t            batch;
+    size_t             n = 0;
+    // threshold 7, 2 points, no trailer
+    buf[n++]       = 7;
+    buf[n++]       = 0;
+    buf[n++]       = 2;
+    uint32_t pt[4] = { 1000, 2000, 1500, 2500 };
+    memcpy(&buf[n], pt, sizeof(pt));
+    n += sizeof(pt);
+    CHECK(db_steering_path_from_wire(buf, n, &path, &batch) && path.count == 2 && batch == 0 && path.threshold_mm == 7.0f, "points only: 2 points, no batch id");
+    CHECK(path.points[1].x_mm == 1500.0f && path.points[1].y_mm == 2500.0f && !path.points[0].has_heading && !path.points[1].has_heading, "points only: coordinates, no headings");
+    CHECK(!db_steering_path_from_wire(buf, n - 1, &path, &batch), "a point cut short is refused");
+
+    // trailer: batch 9, tolerance 4, pass 30, headings none and -90.00
+    uint8_t trailer[4] = { 9, 4, 30, 0 };
+    memcpy(&buf[n], trailer, sizeof(trailer));
+    n += sizeof(trailer);
+    int16_t headings[2] = { DB_WAYPOINT_NO_HEADING, -9000 };
+    memcpy(&buf[n], headings, sizeof(headings));
+    n += sizeof(headings);
+    CHECK(db_steering_path_from_wire(buf, n, &path, &batch) && batch == 9 && path.heading_tol_deg == 4.0f && path.pass_mm == 30.0f, "trailer: batch id, tolerance, pass radius");
+    CHECK(!path.points[0].has_heading && path.points[1].has_heading && path.points[1].heading_deg == -90.0f, "trailer: headings, none and -90");
+    CHECK(db_steering_path_from_wire(buf, n - 1, &path, &batch) && batch == 0 && !path.points[1].has_heading, "a trailer cut short is ignored");
+
+    // an empty batch is a stop
+    uint8_t stop[4] = { 10, 0, 0, 5 };
+    CHECK(db_steering_path_from_wire(stop, sizeof(stop), &path, &batch) && path.count == 0, "count 0: a stop");
+    CHECK(!db_steering_path_from_wire(stop, 2, &path, &batch), "no count: refused");
 }
 
 int main(void) {
@@ -831,6 +1217,22 @@ int main(void) {
     test_turn_never_exceeds_spin_limit();
     test_pivot_without_floor();
     test_stop_goes_idle();
+    test_square();
+    test_zigzag();
+    test_gentle_curve_keeps_speed();
+    test_sharp_corner_slows();
+    test_u_turn();
+    test_point_behind();
+    test_completion();
+    test_failed_mid_path();
+    test_retarget_mid_path();
+    test_pass_beyond_the_leg();
+    test_pose_in_the_middle();
+    test_max_speed();
+    test_precise_arrival();
+    test_precise_creep_stops_on_time();
+    test_precise_fails_to_settle();
+    test_path_from_wire();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
