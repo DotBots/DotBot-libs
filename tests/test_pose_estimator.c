@@ -48,6 +48,8 @@ static const db_pose_estimator_conf_t _conf = {
     .seed_fixes                 = DB_POSE_ESTIMATOR_SEED_FIXES,
     .seed_tolerance_mm          = DB_POSE_ESTIMATOR_SEED_TOLERANCE_MM,
     .acquire_mm                 = DB_POSE_ESTIMATOR_ACQUIRE_MM,
+    .kidnap_fixes               = DB_POSE_ESTIMATOR_KIDNAP_FIXES,
+    .kidnap_still_mm            = DB_POSE_ESTIMATOR_KIDNAP_STILL_MM,
 };
 
 //=========================== simulated robot ==================================
@@ -286,9 +288,9 @@ static void test_gate_rejects_outlier(void) {
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING, "one outlier does not lose the pose, status %d", est.status);
 }
 
-static void test_timeout_reseeds(void) {
-    // Picked up and put down elsewhere, turned: the encoders never saw it, so
-    // every fix is outside the gate until the timeout, then a chain reseeds
+static void test_kidnap_reseeds(void) {
+    // Picked up and put down elsewhere, turned, wheels still: the estimator
+    // gives up the pose after DB_POSE_ESTIMATOR_KIDNAP_FIXES fixes, not the timeout
     db_pose_estimator_t est;
     robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 6, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
     db_pose_estimator_init(&est, &_conf);
@@ -297,15 +299,60 @@ static void test_timeout_reseeds(void) {
     r.x     = 1500;
     r.y     = 1300;
     r.theta = 100 * DEG;
-    _run(&est, &r, 0, 0, _conf.timeout_ticks, 1, LH2_NOISE_SD_MM);
-    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING, "still tracking until the timeout, status %d", est.status);
-    CHECK(est.rejected >= 9, "fixes after the move are rejected, %u", est.rejected);
-    _run(&est, &r, 0, 0, 20, 1, LH2_NOISE_SD_MM);
-    float h = 0;
-    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && !db_pose_estimator_heading_deg(&est, &h), "lost after the timeout, with no heading, status %d", est.status);
+    _run(&est, &r, 0, 0, (_conf.kidnap_fixes - 1) * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.kidnaps == 0, "still tracking one fix short of a kidnap, status %d", est.status);
+    _run(&est, &r, 0, 0, TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    float h = 0, sx = 0, sy = 0;
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.kidnaps == 1, "a kidnap after %u fixes, status %d kidnaps %u", _conf.kidnap_fixes, est.status, est.kidnaps);
+    CHECK(!db_pose_estimator_heading_deg(&est, &h) && !db_pose_estimator_sensor(&est, &sx, &sy), "no heading and no pose after a kidnap");
+    CHECK(hypotf(est.chain_x - (r.x - _conf.lever_mm * sinf(r.theta)), est.chain_y - (r.y + _conf.lever_mm * cosf(r.theta))) < 5.0f, "the chain starts on the new fixes");
+    _run(&est, &r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.seeds == 0, "standing still does not guess a heading, status %d", est.status);
     _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "reseeded once the robot moves, status %d, seeds %u", est.status, est.seeds);
     CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "reseeded heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));
+    CHECK(hypotf(est.x - r.x, est.y - r.y) < 5.0f, "reseeded axle within 5 mm, %.2f off", hypotf(est.x - r.x, est.y - r.y));
+}
+
+static void test_outlier_still_no_kidnap(void) {
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 9, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+    _run(&est, &r, 0, 0, 50, 1, LH2_NOISE_SD_MM);
+    float zx, zy;
+    _robot_sensor(&r, 0, &zx, &zy);
+    // Two outliers at the same spot, one short of a kidnap, then a good fix
+    for (uint32_t i = 0; i + 1 < _conf.kidnap_fixes; i++) {
+        db_pose_estimator_update(&est, zx + 200, zy);
+    }
+    _run(&est, &r, 0, 0, 10 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    db_pose_estimator_update(&est, zx + 200, zy);
+    _run(&est, &r, 0, 0, 10 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.kidnaps == 0 && est.seeds == 0, "outliers broken up by good fixes do not reseed, status %d kidnaps %u", est.status, est.kidnaps);
+    // Rejected fixes that disagree with each other do not reseed either
+    for (uint32_t i = 0; i < 2 * _conf.kidnap_fixes; i++) {
+        db_pose_estimator_update(&est, zx + 200 + 50 * (float)i, zy);
+    }
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.kidnaps == 0, "scattered rejected fixes do not reseed, status %d kidnaps %u", est.status, est.kidnaps);
+}
+
+static void test_rejected_while_driving_times_out(void) {
+    // Knocked sideways while driving: the wheels turn, so this is not a
+    // kidnap; the pose is held until the timeout, then a chain reseeds
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 6, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+    _run(&est, &r, 10, 10, 50, 1, LH2_NOISE_SD_MM);
+    r.x += 200;
+    _run(&est, &r, 10, 10, _conf.timeout_ticks, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.kidnaps == 0, "still tracking until the timeout, status %d kidnaps %u", est.status, est.kidnaps);
+    CHECK(est.rejected >= 9, "fixes after the knock are rejected, %u", est.rejected);
+    _run(&est, &r, 10, 10, 20, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST, "lost after the timeout, status %d", est.status);
+    _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1 && est.kidnaps == 0, "reseeded by the chain, status %d, seeds %u", est.status, est.seeds);
     CHECK(hypotf(est.x - r.x, est.y - r.y) < 5.0f, "reseeded axle within 5 mm, %.2f off", hypotf(est.x - r.x, est.y - r.y));
 }
 
@@ -422,7 +469,9 @@ int main(void) {
     test_acquire_heading_from_motion();
     test_acquire_heading_from_spin();
     test_gate_rejects_outlier();
-    test_timeout_reseeds();
+    test_kidnap_reseeds();
+    test_outlier_still_no_kidnap();
+    test_rejected_while_driving_times_out();
     test_occlusion_keeps_heading();
     test_fix_age_compensated();
     test_noise_scales_with_distance();

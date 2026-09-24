@@ -112,10 +112,38 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     est->P[2][2]            = var_theta;
     est->status             = DB_POSE_ESTIMATOR_TRACKING;
     est->chain_count        = 0;
+    est->kidnap_count       = 0;
     est->ticks_since_accept = 0;
     _travel_clear(est);
     est->seeds++;
     return DB_POSE_ESTIMATOR_SEEDED;
+}
+
+/// Counts a fix the gate rejected while TRACKING toward a kidnap, and on the
+/// last one returns to SEEDING with the chain started on these fixes
+static void _kidnap_check(db_pose_estimator_t *est, float x_mm, float y_mm) {
+    const db_pose_estimator_conf_t *conf = est->conf;
+    if (conf->kidnap_fixes == 0) {
+        return;
+    }
+    float dx = x_mm - est->kidnap_x;
+    float dy = y_mm - est->kidnap_y;
+    if (est->kidnap_count == 0 || est->kidnap_travel_mm > conf->kidnap_still_mm || sqrtf(dx * dx + dy * dy) > conf->seed_tolerance_mm) {
+        est->kidnap_x         = x_mm;
+        est->kidnap_y         = y_mm;
+        est->kidnap_travel_mm = 0;
+        est->kidnap_count     = 1;
+    } else {
+        est->kidnap_count++;
+    }
+    if (est->kidnap_count < conf->kidnap_fixes) {
+        return;
+    }
+    est->status = DB_POSE_ESTIMATOR_SEEDING;
+    _chain_start(est, est->kidnap_x, est->kidnap_y);
+    est->chain_count  = est->kidnap_count;
+    est->kidnap_count = 0;
+    est->kidnaps++;
 }
 
 /// Gated EKF update with h(x) = axle + lever(theta), on the fix moved forward
@@ -206,6 +234,7 @@ void db_pose_estimator_seed(db_pose_estimator_t *est, float x_mm, float y_mm, fl
     est->P[2][2]            = (heading_sd_deg * DEG_TO_RAD) * (heading_sd_deg * DEG_TO_RAD);
     est->status             = DB_POSE_ESTIMATOR_TRACKING;
     est->chain_count        = 0;
+    est->kidnap_count       = 0;
     est->ticks_since_accept = 0;
     _travel_clear(est);
 }
@@ -220,8 +249,9 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
         est->ticks_since_accept += elapsed_ticks;
     }
     if (est->status == DB_POSE_ESTIMATOR_TRACKING && est->ticks_since_accept > conf->timeout_ticks) {
-        est->status      = DB_POSE_ESTIMATOR_LOST;
-        est->chain_count = 0;
+        est->status       = DB_POSE_ESTIMATOR_LOST;
+        est->chain_count  = 0;
+        est->kidnap_count = 0;
     }
 
     float d_left  = (float)counts_left * DB_MM_PER_COUNT;
@@ -240,6 +270,10 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
     }
     float q_theta = (conf->q_heading_roll_deg2_per_mm * fabsf(d) + conf->q_heading_turn_deg2_per_mm * dd * turn_scale) * DEG_TO_RAD * DEG_TO_RAD;
     float q_pos   = conf->q_pos_mm2_per_mm * fabsf(d);
+
+    if (est->kidnap_count > 0) {
+        est->kidnap_travel_mm += fabsf(d_left) + fabsf(d_right);
+    }
 
     if (est->status != DB_POSE_ESTIMATOR_TRACKING && est->chain_count > 0) {
         float mid = est->chain_dtheta + 0.5f * dtheta;
@@ -295,6 +329,9 @@ db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, fl
             est->status             = DB_POSE_ESTIMATOR_TRACKING;
             est->ticks_since_accept = 0;
             est->chain_count        = 0;
+            est->kidnap_count       = 0;
+        } else if (est->status == DB_POSE_ESTIMATOR_TRACKING) {
+            _kidnap_check(est, x_mm, y_mm);
         } else if (est->status == DB_POSE_ESTIMATOR_LOST) {
             result = _chain_add(est, x_mm, y_mm);
             if (result == DB_POSE_ESTIMATOR_CHAINED) {

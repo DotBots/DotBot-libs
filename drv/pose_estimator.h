@@ -27,6 +27,12 @@
  * a fix inside the gate returns to TRACKING, and a new consistent chain reseeds
  * the whole pose. Heading and pose are only valid while TRACKING.
  *
+ * Kidnap: while TRACKING, kidnap_fixes rejected fixes in a row that agree
+ * within seed_tolerance_mm, with at most kidnap_still_mm of wheel travel since
+ * the first of them, mean the robot was moved by hand. The estimator returns
+ * to SEEDING at once, with those fixes as the start of its chain, so heading
+ * stays unknown until motion re-acquires it.
+ *
  * No hardware calls, so the module also builds on the host for its tests.
  *
  * @{
@@ -97,6 +103,13 @@
 /// Photodiode travel in the body frame, in mm, a chain needs to solve for heading
 #define DB_POSE_ESTIMATOR_ACQUIRE_MM (40.0f)
 
+/// Consistent rejected fixes, with the wheels still, that mean a kidnap: 0.3 s at 10 Hz
+#define DB_POSE_ESTIMATOR_KIDNAP_FIXES (3U)
+
+/// Most wheel travel, in mm, |d_left| + |d_right| summed since the first of
+/// those fixes, for the wheels to count as still
+#define DB_POSE_ESTIMATOR_KIDNAP_STILL_MM (2.0f)
+
 /// Life-cycle state
 typedef enum {
     DB_POSE_ESTIMATOR_SEEDING,   ///< No pose; collecting a chain of consistent fixes
@@ -127,6 +140,8 @@ typedef struct {
     uint32_t seed_fixes;                  ///< fixes a seed chain needs
     float    seed_tolerance_mm;           ///< chain consistency tolerance, mm
     float    acquire_mm;                  ///< body-frame photodiode travel needed for heading, mm
+    uint32_t kidnap_fixes;                ///< consistent rejected fixes with the wheels still that reseed; 0 disables
+    float    kidnap_still_mm;             ///< wheel travel |d_left| + |d_right| over those fixes still counted as still, mm
 } db_pose_estimator_conf_t;
 
 /// Photodiode travel over the most recent predicts, newest at head - 1
@@ -153,11 +168,16 @@ typedef struct {
     float                           chain_dtheta;        ///< rotation since that fix, rad
     float                           chain_var_theta;     ///< heading variance odometry added since that fix, rad^2
     uint32_t                        chain_count;         ///< fixes in the chain, 0 when none
+    float                           kidnap_x;            ///< first of the consecutive rejected fixes, mm
+    float                           kidnap_y;            ///< first of the consecutive rejected fixes, mm
+    float                           kidnap_travel_mm;    ///< wheel travel |d_left| + |d_right| since that fix, mm
+    uint32_t                        kidnap_count;        ///< consecutive consistent rejected fixes, 0 when none
     float                           last_d2;             ///< squared Mahalanobis distance of the last gated fix
     uint32_t                        predicts;            ///< predict calls, wraps
     uint32_t                        accepted;            ///< fixes applied, wraps
     uint32_t                        rejected;            ///< fixes rejected, wraps
     uint32_t                        seeds;               ///< pose seeded or reseeded from a chain, wraps
+    uint32_t                        kidnaps;             ///< returns to SEEDING on a kidnap, wraps
 } db_pose_estimator_t;
 
 //=========================== prototypes =======================================
