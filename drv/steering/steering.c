@@ -209,7 +209,10 @@ static void _move(db_steering_t *steering, const db_steering_pose_t *pose, uint3
     if (reach >= conf->bearing_min_mm) {
         error = _wrap180(atan2f(-rx, ry) * RAD_TO_DEG - heading);
         if (reach < lever + conf->near_mm) {
-            error = _wrap90(error);
+            // Near the axle the bearing swings with every millimetre; a target
+            // this close to the heading line is reached by driving along it
+            float cross = fabsf(rx * fy - ry * fx);
+            error       = (cross < 0.5f * threshold) ? 0 : _wrap90(error);
         }
     }
     float along = rx * fx + ry * fy - lever;
