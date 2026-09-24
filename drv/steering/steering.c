@@ -360,7 +360,11 @@ static void _move(db_steering_t *steering, const db_steering_pose_t *pose, uint3
         float tol     = (steering->path.heading_tol_deg > 0) ? steering->path.heading_tol_deg : conf->final_tol_deg;
         float heading = pose->heading_deg + steering->omega_deg_s * conf->lookahead_s;
         float error   = _wrap180(point->heading_deg - heading);
-        if (fabsf(_wrap180(point->heading_deg - pose->heading_deg)) < tol && fabsf(error) < tol) {
+        // Inside the band once the turn has stopped or is about to pass the
+        // heading, so it ends near the centre, not at the edge it came in from
+        float now      = _wrap180(point->heading_deg - pose->heading_deg);
+        bool  finished = steering->omega_deg_s == 0 || error * steering->omega_deg_s <= 0;
+        if (fabsf(now) < tol && fabsf(error) < tol && finished) {
             if (last) {
                 _arrive(steering, out);
                 return;
@@ -610,6 +614,16 @@ bool db_steering_poll(db_steering_t *steering, const db_steering_pose_t *pose, d
     if (steering->state == DB_STEERING_DRIVE && _is_precise(steering) && _precise_reached(steering, pose)) {
         _settle(steering, out);
         return true;
+    }
+    if (steering->state == DB_STEERING_FINAL_TURN && steering->omega_deg_s != 0) {
+        // Brake the turn in place as soon as its run-on would carry it past the heading
+        float heading = pose->heading_deg + steering->omega_deg_s * steering->conf->runon_s;
+        float error   = _wrap180(steering->path.points[steering->index].heading_deg - heading);
+        if (error * steering->omega_deg_s <= 0) {
+            _halt(steering, true, out);
+            return true;
+        }
+        return false;
     }
     if (steering->state != DB_STEERING_NUDGE) {
         return false;

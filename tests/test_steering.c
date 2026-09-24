@@ -1190,6 +1190,31 @@ static void test_path_from_wire(void) {
     CHECK(!db_steering_path_from_wire(stop, 2, &path, &batch), "no count: refused");
 }
 
+static int s_ok(float mean_short) {
+    return fabsf(mean_short) < 0.6f;
+}
+
+static void test_final_heading_unbiased(void) {
+    // A turn in place ends near the centre of the tolerance band, not at the edge it
+    // enters from: the mean signed error over turns both ways stays small
+    const float headings[] = { 90, -150, 45, -90, 135, -30, 170, -170 };
+    float       sum = 0, worst = 0;
+    for (unsigned i = 0; i < 8; i++) {
+        sim_t s;
+        _sim_init(&s, 1000, 500, 0, 1, 0.04f);
+        s.robot.noise_mm        = 0.3f;
+        db_steering_path_t path = { .count = 1, .threshold_mm = 10, .points = { { .x_mm = 1000, .y_mm = 500, .has_heading = true, .heading_deg = headings[i] } } };
+        db_steering_set_path(&s.steering, &path);
+        _sim_until_done(&s, 1500);
+        float e = _angle_diff(_true_heading_deg(&s), headings[i]);
+        // the sign that says which side of the band it stopped on, relative to the turn
+        float turned = _angle_diff(headings[i], 0);
+        sum += (turned > 0) ? -e : e;
+        worst = fmaxf(worst, fabsf(e));
+    }
+    CHECK(s_ok(sum / 8.0f), "final turns stop short on average by %.2f deg, worst %.1f", sum / 8.0f, worst);
+}
+
 int main(void) {
     test_idle_holds_still();
     test_target_ahead();
@@ -1233,6 +1258,7 @@ int main(void) {
     test_precise_creep_stops_on_time();
     test_precise_fails_to_settle();
     test_path_from_wire();
+    test_final_heading_unbiased();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
