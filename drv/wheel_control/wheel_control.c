@@ -14,10 +14,9 @@
 
 //=========================== defines ==========================================
 
-/// Consecutive steps without a count before a turning wheel counts as stalled
-/// again. Below about 25 mm/s a rolling wheel also goes this long between
-/// counts, so the kick returns there; that is the price of detecting a stall.
-#define STALL_TICKS (4U)
+/// Consecutive steps without a count before a wheel counts as standing. A wheel
+/// rolling below about 2 mm/s (under one count per 50 ms) reads as standing too.
+#define STILL_TICKS (4U)
 
 //=========================== private ==========================================
 
@@ -45,7 +44,7 @@ void db_wheel_control_reset(db_wheel_control_t *wheel) {
     wheel->measured    = 0;
     wheel->previous    = 0;
     wheel->ff          = 0;
-    wheel->still_ticks = STALL_TICKS;
+    wheel->still_ticks = STILL_TICKS;
     wheel->kick_boost  = 0;
     wheel->brake       = false;
     wheel->forced_ms   = 0;
@@ -76,7 +75,7 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
 
     if (delta_counts != 0) {
         wheel->still_ticks = 0;
-    } else if (wheel->still_ticks < STALL_TICKS) {
+    } else if (wheel->still_ticks < STILL_TICKS) {
         wheel->still_ticks++;
     }
 
@@ -90,10 +89,9 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         wheel->forced_ms = 0;
     }
 
-    // A zero setpoint shorts the motor only while the wheel turns: once it has
-    // stopped it coasts, and a wheel pushed afterwards brakes again. A stalled
+    // A zero setpoint shorts the motor only while the wheel turns; a stalled
     // wheel coasts
-    wheel->brake = (wheel->setpoint == 0) && (wheel->still_ticks < STALL_TICKS);
+    wheel->brake = (wheel->setpoint == 0) && (wheel->still_ticks < STILL_TICKS);
     if (wheel->setpoint == 0 || wheel->stalled) {
         wheel->kick_boost = 0;
         wheel->integral   = 0;
@@ -102,18 +100,15 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
         return 0;
     }
 
-    // The error takes the mean of the last two speeds: a wheel that answers
-    // within one step otherwise sustains a cycle alternating every step, and
-    // a two-step mean has no gain at that frequency
+    // Mean of the last two speeds: no gain at the period-two cycle
     float speed = 0.5f * (wheel->measured + wheel->previous);
     float sign  = (wheel->setpoint > 0) ? 1.0f : -1.0f;
     float error = wheel->setpoint - speed;
 
-    // A stalled wheel gets the kick, and the P term on the whole setpoint so a
-    // step from rest starts with the push the running wheel will need; the
-    // integral stays out of it
+    // A standing wheel gets the kick and the P term on the whole setpoint, and
+    // no integral
     float run = fminf(conf->u_run + conf->k_run * fabsf(wheel->setpoint), conf->pwm_max);
-    if (wheel->still_ticks >= STALL_TICKS) {
+    if (wheel->still_ticks >= STILL_TICKS) {
         float kick        = fmaxf(conf->u_breakaway, run);
         wheel->kick_boost = fminf(wheel->kick_boost, conf->pwm_max - kick);
         wheel->ff         = sign * (kick + wheel->kick_boost);
@@ -122,15 +117,13 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
     } else {
         wheel->kick_boost = 0;
         wheel->ff         = sign * run;
-        // Outside the zone the wheel is still getting up to speed, and what
-        // the integral would store there is the overshoot at the end of it
         if (fabsf(error) < conf->i_zone) {
             wheel->integral += error * dt;
         }
     }
 
-    // Anti-windup: the integral may only hold what the output range still has
-    // room for once the feedforward is applied
+    // Anti-windup: the integral holds at most the output range the
+    // feedforward leaves
     if (conf->ki > 0) {
         wheel->integral = _clamp(wheel->integral, (-conf->pwm_max - wheel->ff) / conf->ki, (conf->pwm_max - wheel->ff) / conf->ki);
     } else {
@@ -138,11 +131,9 @@ int8_t db_wheel_control_step(db_wheel_control_t *wheel, int32_t delta_counts, ui
     }
 
     float pwm = wheel->ff + conf->kp * error + conf->ki * wheel->integral;
-    // Below u_run the motor does not drive and a turning wheel only coasts, so
-    // a wheel well over its setpoint has a command short of it moved past it,
-    // driving against its motion. Nearer the setpoint it coasts, or a wheel the body carries
-    // would flip between braking and driving on every step
-    if (wheel->still_ticks < STALL_TICKS && sign * pwm < conf->u_run && sign * error < -conf->i_zone) {
+    // Below u_run the motor does not drive: a turning wheel more than i_zone
+    // over its setpoint has the command pushed past it, against its motion
+    if (wheel->still_ticks < STILL_TICKS && sign * pwm < conf->u_run && sign * error < -conf->i_zone) {
         pwm -= sign * conf->u_run;
     }
     pwm        = _clamp(pwm, -conf->pwm_max, conf->pwm_max);

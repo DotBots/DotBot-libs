@@ -7,22 +7,17 @@
  * @brief       Per-wheel speed loop: encoder counts in, motor duty out
  *
  * One PI controller per wheel, stepped on a fixed scheduler tick. The setpoint
- * is in mm/s; the only unit change is the encoder measurement inside
- * db_wheel_control_step(), counts to mm/s with DB_MM_PER_COUNT.
+ * is in mm/s; encoder counts are converted with DB_MM_PER_COUNT.
  *
- * The output is the PI plus a feedforward that follows the sign of the
- * setpoint and is zero at a zero setpoint: the running line
- * (u_run + k_run x |setpoint|) once the wheel turns, and while it is stalled
- * (no counts for a few steps) a kick of at least u_breakaway that ramps up
- * until the wheel moves, since the duty that frees a wheel changes with where
- * it came to rest. The PI trims around that
- * feedforward. On a turning wheel more than i_zone over its setpoint, a
- * command that comes out below u_run is moved past it, since there the motor
- * does not drive and the wheel would only coast. A zero setpoint outputs zero
- * duty and clears the integral and the kick, so a stopped wheel never creeps,
- * and sets the wheel's brake flag while the wheel still turns: the app shorts
- * that motor until the wheel has gone a stall's worth of steps without a
- * count, then lets it coast.
+ * Output = feedforward + PI. The feedforward follows the sign of the setpoint:
+ * the running line u_run + k_run x |setpoint| on a turning wheel, and on a
+ * standing wheel (no counts for a few steps) a kick of at least u_breakaway
+ * that grows by kick_ramp per step until the wheel turns. A turning wheel more
+ * than i_zone over its setpoint gets a command below u_run pushed past it.
+ *
+ * A zero setpoint outputs zero duty, clears the integral and the kick, and sets
+ * the brake flag until the wheel has stood for as long as a standing wheel
+ * takes to be detected.
  *
  * A wheel held at or above stall_pwm with no counts for stall_ms is stalled:
  * it outputs zero duty without braking (the motor coasts) until the setpoint
@@ -48,8 +43,8 @@
 typedef struct {
     float    kp;                 ///< duty per mm/s of speed error
     float    ki;                 ///< duty per mm of accumulated speed error
-    float    u_breakaway;        ///< least duty applied to a stalled wheel
-    float    kick_ramp;          ///< duty added per step while a wheel stays stalled
+    float    u_breakaway;        ///< least duty applied to a standing wheel
+    float    kick_ramp;          ///< duty added per step while a wheel stays standing
     float    u_run;              ///< duty of the running line at zero speed
     float    k_run;              ///< slope of the running line, duty per mm/s
     float    i_zone;             ///< the integral only accumulates while |error| is below this, mm/s
@@ -69,7 +64,7 @@ typedef struct {
     float                          previous;     ///< mm/s at the step before
     float                          ff;           ///< feedforward at the last step, duty, for telemetry
     uint32_t                       still_ticks;  ///< consecutive steps without a count, saturating
-    float                          kick_boost;   ///< duty the stall ramp has added so far
+    float                          kick_boost;   ///< duty the kick ramp has added so far
     bool                           brake;        ///< short the motor instead of applying the duty
     uint32_t                       forced_ms;    ///< time at or above stall_pwm without a count, ms
     bool                           stalled;      ///< coasting after a stall, until the setpoint changes
