@@ -125,14 +125,13 @@ typedef struct __attribute__((packed)) {
 /// Trailer after the points of DB_PROTOCOL_LH2_WAYPOINTS (threshold u16,
 /// count u8, then count protocol_lh2_location_t), followed by one int16
 /// heading per point in centidegrees, 0 facing +y and clockwise positive, or
-/// DB_WAYPOINT_NO_HEADING. A point with a heading is a pose: (x, y) is the axle
-/// midpoint, and the robot turns to the heading there. Without one, (x, y) is
-/// the photodiode's target. Apps that read only threshold, count and points
-/// ignore the trailer.
+/// DB_WAYPOINT_NO_HEADING. Every (x, y) is a position for the axle midpoint; a
+/// point with a heading is a pose, where the robot turns to the heading. Apps
+/// that read only threshold, count and points ignore the trailer.
 typedef struct __attribute__((packed)) {
     uint8_t  batch_id;         ///< Echoed in the advertisement; a batch repeating the current id is ignored; 0 for none
     uint8_t  heading_tol_deg;  ///< Tolerance of the headings, degrees; 0 for the firmware default
-    uint16_t pass_mm;          ///< Radius the photodiode passes an intermediate point within, mm; 0 for the firmware default
+    uint16_t pass_mm;          ///< Radius the axle passes an intermediate point within, mm; 0 for the firmware default
 } protocol_lh2_waypoints_trailer_t;
 _Static_assert(sizeof(protocol_lh2_waypoints_trailer_t) == 4, "protocol_lh2_waypoints_trailer_t is a wire format");
 
