@@ -97,7 +97,8 @@ static int32_t _plant_step(plant_t *p, int8_t pwm, uint32_t ticks) {
 
 //=========================== fixtures =========================================
 
-static const db_wheel_control_conf_t _conf = {
+/// Gains tuned against the plant, with a slew limit and saturation short of full duty
+static const db_wheel_control_conf_t _conf_model = {
     .kp                = 0.5f,
     .ki                = 5.0f,
     .u_breakaway       = 44.0f,
@@ -110,6 +111,24 @@ static const db_wheel_control_conf_t _conf = {
     .stall_pwm         = 60.0f,
     .stall_ms          = 500U,
 };
+
+/// Full duty and no slew limit; keep in step with apps-sandbox/dotbot-next in DotBot-firmware
+static const db_wheel_control_conf_t _conf_shipped = {
+    .kp                = 0.52f,
+    .ki                = 5.2f,
+    .u_breakaway       = 44.0f,
+    .kick_ramp         = 0.5f,
+    .u_run             = 32.0f,
+    .k_run             = 0.097f,
+    .i_zone            = 38.0f,
+    .pwm_max           = 100.0f,
+    .pwm_slew_per_tick = 100.0f,
+    .stall_pwm         = 80.0f,
+    .stall_ms          = 500U,
+};
+
+/// The configuration the suite is running against
+static db_wheel_control_conf_t _conf;
 
 typedef struct {
     float peak;         ///< highest measured speed, mm/s
@@ -386,6 +405,29 @@ static void test_elapsed_ticks(void) {
     float  before = w.pwm;
     int8_t again  = db_wheel_control_step(&w, 0, 0);
     CHECK(again == (int8_t)before && !isnan(w.pwm), "zero elapsed ticks returns the previous output, got %d want %d", again, (int8_t)before);
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, 200);
+    int8_t pwm = db_wheel_control_step(&w, 5, 100000);
+    CHECK(!isnan(w.pwm) && abs(pwm) <= (int)_conf.pwm_max, "a very late step stays finite and bounded, got %d", pwm);
+}
+
+static void test_elapsed_ticks_plant(void) {
+    // Every step covers two ticks, as a main loop running at half rate
+    db_wheel_control_t w;
+    plant_t            p;
+    db_wheel_control_init(&w, &_conf);
+    _plant_init(&p);
+    db_wheel_control_set_setpoint(&w, 150);
+    int8_t pwm = 0;
+    float  sum = 0;
+    for (int t = 0; t < 200; t++) {
+        int32_t counts = _plant_step(&p, pwm, 2);
+        pwm            = db_wheel_control_step(&w, counts, 2);
+        if (t >= 150) {
+            sum += w.measured;
+        }
+    }
+    CHECK(fabsf(sum / 50 - 150) <= 7.5f && !w.stalled, "150 mm/s stepped every 20 ms: steady %.1f, stalled %d", sum / 50, w.stalled);
 }
 
 static void test_counts(void) {
@@ -491,7 +533,51 @@ static void test_coasts_near_setpoint(void) {
     CHECK(pwm >= 0, "20 mm/s over a 30 mm/s setpoint coasts rather than brakes, got duty %d", pwm);
 }
 
-int main(void) {
+static void test_brakes_through_dead_zone_backward(void) {
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &_conf);
+    db_wheel_control_set_setpoint(&w, -300);
+    int32_t counts = -(int32_t)roundf(300 * 0.010f / DB_MM_PER_COUNT);
+    for (int t = 0; t < 50; t++) {
+        db_wheel_control_step(&w, counts, 1);
+    }
+    db_wheel_control_set_setpoint(&w, -200);
+    int8_t pwm = 0;
+    for (int t = 0; t < 10; t++) {
+        pwm = db_wheel_control_step(&w, counts, 1);
+    }
+    CHECK(pwm >= _conf.u_run / 2, "a wheel 100 mm/s over a backward setpoint brakes forward, got duty %d", pwm);
+}
+
+static void test_brake_idle(void) {
+    db_wheel_control_t w;
+    db_wheel_control_init(&w, &_conf);
+    CHECK(!w.brake && !w.stalled, "no brake and no stall at boot");
+    int brakes = 0;
+    for (int t = 0; t < 100; t++) {
+        db_wheel_control_step(&w, 0, 1);
+        brakes += w.brake;
+    }
+    CHECK(brakes == 0, "a standing wheel at a zero setpoint never brakes, braked %d steps", brakes);
+}
+
+static void test_reset_mid_motion(void) {
+    db_wheel_control_t w;
+    plant_t            p;
+    db_wheel_control_init(&w, &_conf);
+    _plant_init(&p);
+    _run(&w, &p, 200, 200);
+    db_wheel_control_reset(&w);
+    CHECK(w.setpoint == 0 && w.integral == 0 && w.pwm == 0 && !w.brake, "reset zeroes the setpoint, integral and output");
+    int8_t pwm = db_wheel_control_step(&w, _plant_step(&p, 0, 1), 1);
+    CHECK(pwm == 0 && w.brake, "after a reset a wheel still turning brakes, got duty %d brake %d", pwm, w.brake);
+    run_t r = _run(&w, &p, 150, 300);
+    CHECK(fabsf(r.mean_last_s - 150) <= 7.5f, "after a reset the loop drives again, steady %.1f", r.mean_last_s);
+}
+
+static void _suite(const db_wheel_control_conf_t *conf, const char *name) {
+    int failed = _failed;
+    _conf      = *conf;
     test_zero_setpoint_no_creep();
     test_step_from_rest(200);
     test_step_from_rest(-200);
@@ -506,6 +592,7 @@ int main(void) {
     test_no_false_stall();
     test_reversal();
     test_elapsed_ticks();
+    test_elapsed_ticks_plant();
     test_counts();
     test_twist();
     test_sign_change_clears_integral();
@@ -513,7 +600,16 @@ int main(void) {
     test_period_two_rejected();
     test_stall_start_pushes();
     test_brakes_through_dead_zone();
+    test_brakes_through_dead_zone_backward();
     test_coasts_near_setpoint();
+    test_brake_idle();
+    test_reset_mid_motion();
+    printf("%s gains: %d failed\n", name, _failed - failed);
+}
+
+int main(void) {
+    _suite(&_conf_model, "model");
+    _suite(&_conf_shipped, "shipped");
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
