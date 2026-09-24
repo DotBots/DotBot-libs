@@ -396,9 +396,9 @@ static void test_very_close_targets(void) {
 static void test_near_axle_target_no_pivot(void) {
     // A target near the axle, a few mm off the heading line: the photodiode
     // gets there by backing up, not by turning round
-    const float lateral[] = { 2, -3, 4 };
-    const float thr[]     = { 5, 10, 10 };
-    for (unsigned i = 0; i < 3; i++) {
+    const float lateral[] = { 2, -3, 4, 4 };
+    const float thr[]     = { 5, 10, 10, 5 };
+    for (unsigned i = 0; i < 4; i++) {
         sim_t s;
         float px, py;
         _sim_init(&s, 1000, 500, 0, 1, 0.04f);
@@ -407,7 +407,7 @@ static void test_near_axle_target_no_pivot(void) {
         _goto(&s, x, y, thr[i]);
         _sim_until_done(&s, 1000);
         CHECK(s.steering.state == DB_STEERING_ARRIVED, "near axle, %.0f mm off the line: arrived, state %d", lateral[i], s.steering.state);
-        CHECK(s.pivot_steps == 0 && fabsf(_true_heading_deg(&s)) < 10.0f, "near axle, %.0f mm off the line: no turn round, %d pivot steps, heading %.1f", lateral[i], s.pivot_steps, _true_heading_deg(&s));
+        CHECK(s.pivot_steps == 0 && fabsf(_true_heading_deg(&s)) < 10.0f, "near axle, %.0f mm off the line, threshold %.0f: no turn round, %d pivot steps, heading %.1f", lateral[i], thr[i], s.pivot_steps, _true_heading_deg(&s));
         CHECK(_miss(&s, x, y) <= thr[i] + 2.0f, "near axle, %.0f mm off the line: within the threshold, missed by %.1f", lateral[i], _miss(&s, x, y));
     }
 }
