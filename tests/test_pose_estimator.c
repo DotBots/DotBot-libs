@@ -459,6 +459,32 @@ static void test_turn_noise_grows_with_turn_speed(void) {
     CHECK(c.P[2][2] > 1.5f * b.P[2][2], "above it, faster turning adds more heading noise: %.6g against %.6g", c.P[2][2], b.P[2][2]);
 }
 
+static void test_covariance_stays_positive_definite(void) {
+    // An hour at rest at 10 Hz: fixes shrink P toward rank 1, which the
+    // non-Joseph update let go indefinite in float32
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 12, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 5);
+    uint32_t indefinite = 0;
+    for (uint32_t t = 1; t <= 3600U * 100U; t++) {
+        db_pose_estimator_predict(&est, 0, 0, 1);
+        if ((t % TICKS_PER_FIX) == 0) {
+            float zx, zy;
+            _robot_sensor(&r, LH2_NOISE_SD_MM, &zx, &zy);
+            db_pose_estimator_update(&est, zx, zy);
+            const float(*P)[3] = est.P;
+            double m2          = (double)P[0][0] * P[1][1] - (double)P[0][1] * P[1][0];
+            double m3          = P[0][0] * ((double)P[1][1] * P[2][2] - (double)P[1][2] * P[2][1]) - P[0][1] * ((double)P[1][0] * P[2][2] - (double)P[1][2] * P[2][0]) + P[0][2] * ((double)P[1][0] * P[2][1] - (double)P[1][1] * P[2][0]);
+            if (!(P[0][0] > 0 && m2 > 0 && m3 > 0) || P[0][1] != P[1][0] || P[0][2] != P[2][0] || P[1][2] != P[2][1]) {
+                indefinite++;
+            }
+        }
+    }
+    CHECK(indefinite == 0, "P stays symmetric positive definite over an hour at rest, %u updates not", indefinite);
+    CHECK(est.rejected == 0, "no fix is rejected at rest, got %u", est.rejected);
+}
+
 int main(void) {
     test_straight_prediction();
     test_arc_prediction();
@@ -477,6 +503,7 @@ int main(void) {
     test_fix_age_compensated();
     test_noise_scales_with_distance();
     test_turn_noise_grows_with_turn_speed();
+    test_covariance_stays_positive_definite();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

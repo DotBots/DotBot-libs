@@ -201,16 +201,30 @@ static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float 
     est->y += k[1][0] * y0 + k[1][1] * y1;
     est->theta = _wrap(est->theta + k[2][0] * y0 + k[2][1] * y1);
 
-    // P -= K (H P) with H P = pht transposed
-    float np[3][3];
+    // Joseph form, P = (I - K H) P (I - K H)^T + K R K^T, which stays positive
+    // definite in float32 as fixes on a still robot shrink P toward rank 1
+    float ikh[3][3];
+    for (int i = 0; i < 3; i++) {
+        ikh[i][0] = (i == 0) - k[i][0];
+        ikh[i][1] = (i == 1) - k[i][1];
+        ikh[i][2] = (i == 2) - (k[i][0] * a + k[i][1] * b);
+    }
+    float ap[3][3];
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
-            np[i][j] = P[i][j] - (k[i][0] * pht[j][0] + k[i][1] * pht[j][1]);
+            ap[i][j] = ikh[i][0] * P[0][j] + ikh[i][1] * P[1][j] + ikh[i][2] * P[2][j];
+        }
+    }
+    float np[3][3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j <= i; j++) {
+            np[i][j] = ap[i][0] * ikh[j][0] + ap[i][1] * ikh[j][1] + ap[i][2] * ikh[j][2] + conf->r_pos_mm2 * (k[i][0] * k[j][0] + k[i][1] * k[j][1]);
         }
     }
     for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-            P[i][j] = 0.5f * (np[i][j] + np[j][i]);
+        for (int j = 0; j <= i; j++) {
+            P[i][j] = np[i][j];
+            P[j][i] = np[i][j];
         }
     }
     return DB_POSE_ESTIMATOR_ACCEPTED;
