@@ -38,7 +38,7 @@
 /// Nominal quadrature counts per motor shaft revolution: 7 pulses decoded x4
 #define DB_ENCODER_CPR (28.0f)
 
-/// Hand-counted, and confirmed by 1430 +/- 1.5 encoder counts per wheel turn; sold as 50:1
+/// Hand-counted, within 0.14% of the measured 1430 ± 1.5 counts per wheel turn; sold as 50:1
 #define DB_GEAR_RATIO (51.0f)
 
 /// Distance in mm from the wheel-axle midpoint, which is where the robot turns
