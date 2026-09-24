@@ -124,10 +124,53 @@ static void _halt(db_steering_t *steering, bool brake, db_steering_output_t *out
     steering->has_error   = false;
 }
 
+/// Whether the recovery straight from the last tracked pose stays inside the bounds
+static bool _recover_clear(const db_steering_t *steering, float sign) {
+    const db_steering_conf_t *conf = steering->conf;
+    const float              *b    = conf->bounds_mm;
+    if (b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0) {
+        return true;
+    }
+    float fx, fy;
+    _forward(steering->last_heading_deg, &fx, &fy);
+    float reach = sign * (conf->recover_mm + conf->recover_mm_s * conf->runon_s);
+    float x     = steering->last_x_mm + reach * fx;
+    float y     = steering->last_y_mm + reach * fy;
+    float m     = conf->bounds_margin_mm;
+    return x >= b[0] + m && x <= b[2] - m && y >= b[1] + m && y <= b[3] - m;
+}
+
+/// The heading was lost: straight on if moving and allowed, else spin as from rest
+static void _heading_lost(db_steering_t *steering, db_steering_output_t *out) {
+    const db_steering_conf_t *conf   = steering->conf;
+    bool                      moving = fabsf(steering->v_mm_s) > 1.0f;
+    float                     sign   = (steering->v_mm_s < 0) ? -1.0f : 1.0f;
+    if (conf->recover == DB_STEERING_RECOVER_DRIVE && moving && steering->has_last && _recover_clear(steering, sign)) {
+        _enter(steering, DB_STEERING_RECOVER);
+        steering->recover_sign = sign;
+        steering->has_error    = false;
+        out->left_mm_s         = sign * conf->recover_mm_s;
+        out->right_mm_s        = sign * conf->recover_mm_s;
+        out->brake             = false;
+        steering->v_mm_s       = sign * conf->recover_mm_s;
+        steering->omega_deg_s  = 0;
+        return;
+    }
+    _enter(steering, DB_STEERING_NO_HEADING);
+    _halt(steering, false, out);
+}
+
 /// ALIGN, DRIVE and FINAL_TURN, on a tracking pose
 static void _move(db_steering_t *steering, const db_steering_pose_t *pose, uint32_t elapsed_ticks, db_steering_output_t *out) {
     const db_steering_conf_t   *conf   = steering->conf;
     const db_steering_target_t *target = &steering->target;
+
+    float hx, hy;
+    _forward(pose->heading_deg, &hx, &hy);
+    steering->last_x_mm        = pose->x_mm + conf->lever_mm * hx;
+    steering->last_y_mm        = pose->y_mm + conf->lever_mm * hy;
+    steering->last_heading_deg = pose->heading_deg;
+    steering->has_last         = true;
 
     // The steered point and its goal: the photodiode onto the target, or with a
     // final heading the axle onto the point a lever arm behind it
@@ -246,14 +289,16 @@ static void _move(db_steering_t *steering, const db_steering_pose_t *pose, uint3
 //=========================== public ===========================================
 
 void db_steering_init(db_steering_t *steering, const db_steering_conf_t *conf) {
-    steering->conf        = conf;
-    steering->fail        = DB_STEERING_FAIL_NONE;
-    steering->v_mm_s      = 0;
-    steering->omega_deg_s = 0;
-    steering->has_error   = false;
-    steering->distance_mm = 0;
-    steering->spinning    = false;
-    steering->state       = DB_STEERING_IDLE;
+    steering->conf         = conf;
+    steering->fail         = DB_STEERING_FAIL_NONE;
+    steering->v_mm_s       = 0;
+    steering->omega_deg_s  = 0;
+    steering->has_error    = false;
+    steering->distance_mm  = 0;
+    steering->spinning     = false;
+    steering->has_last     = false;
+    steering->recover_sign = 1.0f;
+    steering->state        = DB_STEERING_IDLE;
     _reset_progress(steering);
     _enter(steering, DB_STEERING_IDLE);
 }
@@ -305,7 +350,10 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
             return;
         case DB_STEERING_HOLD:
             if (pose->status == DB_STEERING_POSE_SEEDING) {
-                _fail(steering, DB_STEERING_FAIL_HEADING_LOST);
+                // Standing still: re-acquire by the spin
+                _enter(steering, DB_STEERING_NO_HEADING);
+                _halt(steering, false, out);
+                return;
             } else if (pose->status == DB_STEERING_POSE_TRACKING) {
                 _enter(steering, DB_STEERING_ALIGN);
                 _reset_progress(steering);
@@ -315,6 +363,28 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
                 _fail(steering, DB_STEERING_FAIL_HOLD);
             }
             _halt(steering, true, out);
+            return;
+        case DB_STEERING_RECOVER:
+            if (pose->status == DB_STEERING_POSE_TRACKING) {
+                _enter(steering, DB_STEERING_ALIGN);
+                _reset_progress(steering);
+                steering->has_error = false;
+                _move(steering, pose, elapsed_ticks, out);
+                return;
+            }
+            if (pose->status == DB_STEERING_POSE_LOST) {
+                _enter(steering, DB_STEERING_HOLD);
+                _halt(steering, true, out);
+                return;
+            }
+            if ((float)(steering->state_ticks * DB_STEERING_TICK_MS) / 1000.0f * conf->recover_mm_s >= conf->recover_mm) {
+                _fail(steering, DB_STEERING_FAIL_HEADING_LOST);
+                _halt(steering, true, out);
+                return;
+            }
+            out->left_mm_s  = steering->recover_sign * conf->recover_mm_s;
+            out->right_mm_s = steering->recover_sign * conf->recover_mm_s;
+            out->brake      = false;
             return;
         case DB_STEERING_NO_HEADING:
             if (pose->status == DB_STEERING_POSE_TRACKING && (!steering->spinning || steering->state_ticks >= conf->no_heading_turn_ticks)) {
@@ -347,8 +417,7 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
 
     // ALIGN, DRIVE, FINAL_TURN
     if (pose->status == DB_STEERING_POSE_SEEDING) {
-        _fail(steering, DB_STEERING_FAIL_HEADING_LOST);
-        _halt(steering, true, out);
+        _heading_lost(steering, out);
         return;
     }
     if (pose->status == DB_STEERING_POSE_LOST) {

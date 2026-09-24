@@ -87,6 +87,10 @@ static const db_steering_conf_t _conf = {
     .progress_ticks        = DB_STEERING_PROGRESS_TICKS,
     .progress_mm           = DB_STEERING_PROGRESS_MM,
     .hold_ticks            = DB_STEERING_HOLD_TICKS,
+    .recover               = DB_STEERING_RECOVER_DRIVE,
+    .recover_mm            = DB_STEERING_RECOVER_MM,
+    .recover_mm_s          = DB_STEERING_RECOVER_MM_S,
+    .bounds_margin_mm      = DB_STEERING_BOUNDS_MARGIN_MM,
 };
 
 //=========================== simulated robot ==================================
@@ -554,7 +558,8 @@ static void test_lost_for_good_fails(void) {
     CHECK(s.steering.state == DB_STEERING_FAILED && s.steering.fail == DB_STEERING_FAIL_HOLD, "no fixes for good: FAILED after the HOLD timeout, state %d fail %d", s.steering.state, s.steering.fail);
 }
 
-static void test_heading_lost_mid_move_fails(void) {
+static void test_heading_lost_mid_move_recovers_straight(void) {
+    // Unit level: SEEDING while driving drives straight on, and gives up after recover_mm
     db_steering_t        steering;
     db_steering_output_t out;
     db_steering_pose_t   pose   = { .status = DB_STEERING_POSE_TRACKING, .x_mm = 1000, .y_mm = 500, .heading_deg = 0 };
@@ -565,8 +570,85 @@ static void test_heading_lost_mid_move_fails(void) {
     CHECK(steering.state == DB_STEERING_DRIVE, "aimed at the target: DRIVE at once, state %d", steering.state);
     pose.status = DB_STEERING_POSE_SEEDING;
     db_steering_step(&steering, &pose, 10, &out);
-    CHECK(steering.state == DB_STEERING_FAILED && steering.fail == DB_STEERING_FAIL_HEADING_LOST, "kidnap mid-move: FAILED, state %d fail %d", steering.state, steering.fail);
+    CHECK(steering.state == DB_STEERING_RECOVER && out.left_mm_s == DB_STEERING_RECOVER_MM_S && out.right_mm_s == DB_STEERING_RECOVER_MM_S,
+          "heading lost while driving: straight on at the recovery speed, state %d, %.0f %.0f", steering.state, out.left_mm_s, out.right_mm_s);
+    int steps = 0;
+    while (steering.state == DB_STEERING_RECOVER && steps < 20) {
+        db_steering_step(&steering, &pose, 10, &out);
+        steps++;
+    }
+    float travelled = (float)steps * 0.1f * DB_STEERING_RECOVER_MM_S;
+    CHECK(steering.state == DB_STEERING_FAILED && steering.fail == DB_STEERING_FAIL_HEADING_LOST, "not re-acquired: FAILED, state %d fail %d", steering.state, steering.fail);
+    CHECK(travelled <= DB_STEERING_RECOVER_MM + 0.1f * DB_STEERING_RECOVER_MM_S, "after at most the recovery distance, %.0f mm", travelled);
     CHECK(out.brake && out.left_mm_s == 0 && out.right_mm_s == 0, "and brakes");
+
+    // From rest, the same loss spins instead
+    db_steering_conf_t spin = _conf;
+    spin.recover            = DB_STEERING_RECOVER_SPIN;
+    db_steering_init(&steering, &spin);
+    db_steering_set_target(&steering, &target);
+    pose.status = DB_STEERING_POSE_TRACKING;
+    db_steering_step(&steering, &pose, 10, &out);
+    pose.status = DB_STEERING_POSE_SEEDING;
+    db_steering_step(&steering, &pose, 10, &out);
+    CHECK(steering.state == DB_STEERING_NO_HEADING, "recover = SPIN: back to NO_HEADING, state %d", steering.state);
+}
+
+/// Drives toward a target far ahead, then drops the estimator to SEEDING mid-drive
+static void _lose_heading_mid_drive(sim_t *s, const db_steering_conf_t *conf, int fixes_after) {
+    float x, y;
+    _sim_init(s, 1000, 300, 0, 1, 0.04f);
+    s->steering.conf = conf;
+    _target_from(700, 0, &x, &y);
+    _goto(s, x, y, 10);
+    _sim_run(s, 100);
+    s->est.status      = DB_POSE_ESTIMATOR_SEEDING;
+    s->est.chain_count = 0;
+    s->robot.fixes     = fixes_after;
+}
+
+static void test_recover_straight_closed_loop(void) {
+    sim_t s;
+    float x, y;
+    _target_from(700, 0, &x, &y);
+    _lose_heading_mid_drive(&s, &_conf, 1);
+    float x0 = s.robot.x, y0 = s.robot.y;
+    int   recovering = 0, spun = 0;
+    float at_reacquire = -1;
+    for (int t = 0; t < 1500 && db_steering_active(&s.steering); t += 10) {
+        _sim_run(&s, 10);
+        if (s.steering.state == DB_STEERING_RECOVER) {
+            recovering = 1;
+        } else if (recovering && at_reacquire < 0) {
+            at_reacquire = hypotf(s.robot.x - x0, s.robot.y - y0);
+        }
+        spun |= s.steering.state == DB_STEERING_NO_HEADING;
+    }
+    _sim_run(&s, 50);
+    CHECK(recovering && !spun, "heading lost mid-drive: straight on, no spin, recovered %d spun %d", recovering, spun);
+    CHECK(at_reacquire > 0 && at_reacquire < 100.0f, "re-acquired within 100 mm of travel from 300 mm/s, %.1f", at_reacquire);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && _miss(&s, x, y) < 12.0f, "then arrives, state %d, missed by %.1f", s.steering.state, _miss(&s, x, y));
+
+    // No fixes: gives up after the recovery distance
+    _lose_heading_mid_drive(&s, &_conf, 0);
+    x0 = s.robot.x;
+    y0 = s.robot.y;
+    _sim_run(&s, 200);
+    CHECK(s.steering.state == DB_STEERING_FAILED && s.steering.fail == DB_STEERING_FAIL_HEADING_LOST, "no fixes: FAILED, state %d fail %d", s.steering.state, s.steering.fail);
+    CHECK(hypotf(s.robot.x - x0, s.robot.y - y0) < DB_STEERING_RECOVER_MM + 40.0f, "having gone no further than the recovery straight and its run-on, %.1f mm", hypotf(s.robot.x - x0, s.robot.y - y0));
+
+    // Bounds just ahead: spins instead
+    db_steering_conf_t bounded = _conf;
+    bounded.bounds_mm[0]       = 0;
+    bounded.bounds_mm[1]       = 0;
+    bounded.bounds_mm[2]       = 2000;
+    bounded.bounds_mm[3]       = 1;
+    _lose_heading_mid_drive(&s, &bounded, 1);
+    bounded.bounds_mm[3] = s.steering.last_y_mm + 120.0f;
+    _sim_run(&s, 10);
+    CHECK(s.steering.state == DB_STEERING_NO_HEADING, "the straight would leave the bounds: spins instead, state %d", s.steering.state);
+    _sim_until_done(&s, 1500);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "and then arrives, state %d", s.steering.state);
 }
 
 static void test_new_target_mid_drive(void) {
@@ -738,7 +820,8 @@ int main(void) {
     test_no_heading_times_out();
     test_lost_holds_then_resumes();
     test_lost_for_good_fails();
-    test_heading_lost_mid_move_fails();
+    test_heading_lost_mid_move_recovers_straight();
+    test_recover_straight_closed_loop();
     test_new_target_mid_drive();
     test_retarget_after_arrival();
     test_speed_falls_with_heading_error();
