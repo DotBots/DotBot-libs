@@ -98,19 +98,19 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     float jx = ly;
     float jy = -lx;
 
-    est->x        = x_mm - lx;
-    est->y        = y_mm - ly;
-    est->theta    = theta;
-    est->P[0][0]  = conf->r_pos_mm2 + jx * jx * var_theta;
-    est->P[0][1]  = jx * jy * var_theta;
-    est->P[1][0]  = est->P[0][1];
-    est->P[1][1]  = conf->r_pos_mm2 + jy * jy * var_theta;
-    est->P[0][2]  = jx * var_theta;
-    est->P[2][0]  = est->P[0][2];
-    est->P[1][2]  = jy * var_theta;
-    est->P[2][1]  = est->P[1][2];
-    est->P[2][2]  = var_theta;
-    est->status   = DB_POSE_ESTIMATOR_TRACKING;
+    est->x                  = x_mm - lx;
+    est->y                  = y_mm - ly;
+    est->theta              = theta;
+    est->P[0][0]            = conf->r_pos_mm2 + jx * jx * var_theta;
+    est->P[0][1]            = jx * jy * var_theta;
+    est->P[1][0]            = est->P[0][1];
+    est->P[1][1]            = conf->r_pos_mm2 + jy * jy * var_theta;
+    est->P[0][2]            = jx * var_theta;
+    est->P[2][0]            = est->P[0][2];
+    est->P[1][2]            = jy * var_theta;
+    est->P[2][1]            = est->P[1][2];
+    est->P[2][2]            = var_theta;
+    est->status             = DB_POSE_ESTIMATOR_TRACKING;
     est->chain_count        = 0;
     est->ticks_since_accept = 0;
     _travel_clear(est);
@@ -122,7 +122,7 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
 /// by the photodiode travel since it was captured
 static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float x_mm, float y_mm) {
     const db_pose_estimator_conf_t *conf = est->conf;
-    float (*P)[3]                        = est->P;
+    float(*P)[3]                         = est->P;
 
     uint32_t age = (conf->fix_age_ticks < DB_POSE_ESTIMATOR_FIX_AGE_MAX) ? conf->fix_age_ticks : DB_POSE_ESTIMATOR_FIX_AGE_MAX;
     for (uint32_t i = 1; i <= age; i++) {

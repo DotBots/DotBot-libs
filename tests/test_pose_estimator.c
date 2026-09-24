@@ -52,9 +52,9 @@ static const db_pose_estimator_conf_t _conf = {
 
 //=========================== simulated robot ==================================
 
-#define SIM_SUBSTEPS     (20)
-#define TICKS_PER_FIX    (10U)
-#define LH2_NOISE_SD_MM  (1.0f)
+#define SIM_SUBSTEPS    (20)
+#define TICKS_PER_FIX   (10U)
+#define LH2_NOISE_SD_MM (1.0f)
 
 #define SIM_HISTORY (16U)
 
@@ -91,10 +91,10 @@ static void _robot_step(robot_t *r, int32_t counts_left, int32_t counts_right) {
 
 static float _noise(robot_t *r) {
     // Box-Muller on a 32-bit LCG: reproducible across hosts
-    r->seed    = r->seed * 1664525U + 1013904223U;
-    float u1   = ((float)(r->seed >> 8) + 1.0f) / 16777217.0f;
-    r->seed    = r->seed * 1664525U + 1013904223U;
-    float u2   = (float)(r->seed >> 8) / 16777216.0f;
+    r->seed  = r->seed * 1664525U + 1013904223U;
+    float u1 = ((float)(r->seed >> 8) + 1.0f) / 16777217.0f;
+    r->seed  = r->seed * 1664525U + 1013904223U;
+    float u2 = (float)(r->seed >> 8) / 16777216.0f;
     return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float)M_PI * u2);
 }
 
