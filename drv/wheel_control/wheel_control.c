@@ -163,3 +163,46 @@ void db_wheel_control_from_twist(const db_body_twist_t *twist, float *left_mm_s,
     *left_mm_s  = twist->v_mm_s + w * track / 2.0f;
     *right_mm_s = twist->v_mm_s - w * track / 2.0f;
 }
+
+void db_wheel_goal_start(db_wheel_goal_t *goal, float left_mm, float right_mm, float speed_mm_s) {
+    goal->target_left_mm     = left_mm;
+    goal->target_right_mm    = right_mm;
+    goal->travelled_left_mm  = 0;
+    goal->travelled_right_mm = 0;
+    goal->speed_mm_s         = speed_mm_s;
+    goal->active             = (left_mm != 0 || right_mm != 0) && speed_mm_s > 0;
+}
+
+void db_wheel_goal_straight(db_wheel_goal_t *goal, float distance_mm, float speed_mm_s) {
+    db_wheel_goal_start(goal, distance_mm, distance_mm, speed_mm_s);
+}
+
+void db_wheel_goal_turn(db_wheel_goal_t *goal, float angle_deg, float speed_mm_s) {
+    float arc_mm = angle_deg * (float)M_PI / 180.0f * DB_TRACK_EFFECTIVE / 2.0f;
+    db_wheel_goal_start(goal, arc_mm, -arc_mm, speed_mm_s);
+}
+
+bool db_wheel_goal_step(db_wheel_goal_t *goal, int32_t delta_left, int32_t delta_right, float *left_mm_s, float *right_mm_s) {
+    goal->travelled_left_mm += (float)delta_left * DB_MM_PER_COUNT;
+    goal->travelled_right_mm += (float)delta_right * DB_MM_PER_COUNT;
+    *left_mm_s  = 0;
+    *right_mm_s = 0;
+    if (!goal->active) {
+        return false;
+    }
+
+    bool  left_leads = fabsf(goal->target_left_mm) >= fabsf(goal->target_right_mm);
+    float target     = left_leads ? goal->target_left_mm : goal->target_right_mm;
+    float travelled  = left_leads ? goal->travelled_left_mm : goal->travelled_right_mm;
+    // Travel counted in the direction of the target; travel the wrong way is negative
+    float progress = (target > 0) ? travelled : -travelled;
+    if (progress >= fabsf(target) - DB_WHEEL_GOAL_RUN_ON_S * goal->speed_mm_s) {
+        goal->active = false;
+        return false;
+    }
+
+    float scale = goal->speed_mm_s / fabsf(target);
+    *left_mm_s  = goal->target_left_mm * scale;
+    *right_mm_s = goal->target_right_mm * scale;
+    return true;
+}

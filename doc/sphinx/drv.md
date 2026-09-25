@@ -23,7 +23,6 @@ _api/drv_log_flash
 _api/drv_lsm6ds
 _api/drv_lz4
 _api/drv_motors
-_api/drv_move
 _api/drv_n25q128
 _api/drv_pid
 _api/drv_pose_estimator

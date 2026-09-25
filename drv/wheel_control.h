@@ -39,6 +39,10 @@
 /// Period of one scheduler tick, the unit of the elapsed_ticks argument
 #define DB_WHEEL_CONTROL_TICK_MS (10U)
 
+/// Distance a wheel runs on after its setpoint drops to zero, per mm/s of speed,
+/// in seconds: braking to zero stops the v3 wheel in about 0.05 s times the speed
+#define DB_WHEEL_GOAL_RUN_ON_S (0.05f)
+
 /// Gains and limits, shared by both wheels or given per wheel
 typedef struct {
     float    kp;                 ///< duty per mm/s of speed error
@@ -75,6 +79,16 @@ typedef struct {
     float v_mm_s;       ///< forward speed, positive forward
     float omega_deg_s;  ///< turn rate, positive clockwise (y down, heading 0 along +y)
 } db_body_twist_t;
+
+/// A distance per wheel, driven on the speed loop until the encoders say it is done
+typedef struct {
+    float target_left_mm;      ///< signed distance for the left wheel
+    float target_right_mm;     ///< signed distance for the right wheel
+    float travelled_left_mm;   ///< signed distance counted since the start
+    float travelled_right_mm;  ///< signed distance counted since the start
+    float speed_mm_s;          ///< speed of the wheel with the longer distance
+    bool  active;              ///< driving; false once arrived or never started
+} db_wheel_goal_t;
 
 //=========================== prototypes =======================================
 
@@ -139,5 +153,54 @@ int32_t db_wheel_control_counts(int32_t acc, uint32_t dbl);
  * @param[out]  right_mm_s  Right wheel speed
  */
 void db_wheel_control_from_twist(const db_body_twist_t *twist, float *left_mm_s, float *right_mm_s);
+
+/**
+ * @brief   Start an odometric goal: a signed distance per wheel
+ *
+ * The wheel with the longer distance runs at the given speed and the other one
+ * in proportion, so both finish together. Nothing is driven if both distances
+ * are zero or the speed is not positive.
+ *
+ * @param[out]  goal        Goal state
+ * @param[in]   left_mm     Left wheel distance, positive forward
+ * @param[in]   right_mm    Right wheel distance, positive forward
+ * @param[in]   speed_mm_s  Speed of the wheel with the longer distance, positive
+ */
+void db_wheel_goal_start(db_wheel_goal_t *goal, float left_mm, float right_mm, float speed_mm_s);
+
+/**
+ * @brief   Start a straight move, backward for a negative distance
+ *
+ * @param[out]  goal        Goal state
+ * @param[in]   distance_mm Distance, positive forward
+ * @param[in]   speed_mm_s  Wheel speed, positive
+ */
+void db_wheel_goal_straight(db_wheel_goal_t *goal, float distance_mm, float speed_mm_s);
+
+/**
+ * @brief   Start a turn in place over DB_TRACK_EFFECTIVE
+ *
+ * @param[out]  goal        Goal state
+ * @param[in]   angle_deg   Rotation, positive clockwise
+ * @param[in]   speed_mm_s  Wheel speed, positive
+ */
+void db_wheel_goal_turn(db_wheel_goal_t *goal, float angle_deg, float speed_mm_s);
+
+/**
+ * @brief   Count one step of encoder travel and give the wheel setpoints
+ *
+ * The goal arrives once the longer wheel is within its braking run-on
+ * (DB_WHEEL_GOAL_RUN_ON_S times the speed) of its distance; from then on both
+ * setpoints are zero, which the speed loop turns into braking to a stand.
+ *
+ * @param[in]   goal            Goal state
+ * @param[in]   delta_left      Left encoder counts since the previous step, signed
+ * @param[in]   delta_right     Right encoder counts since the previous step, signed
+ * @param[out]  left_mm_s       Left wheel setpoint
+ * @param[out]  right_mm_s      Right wheel setpoint
+ *
+ * @return  true while the goal is still driving
+ */
+bool db_wheel_goal_step(db_wheel_goal_t *goal, int32_t delta_left, int32_t delta_right, float *left_mm_s, float *right_mm_s);
 
 #endif
