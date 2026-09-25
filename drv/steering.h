@@ -193,34 +193,51 @@ typedef enum {
  * @brief   Steering state
  *
  * @verbatim
- *          set_target             tracks (1)           |err| < align_exit_deg
+ *          set_path               tracks (1)           |err| < align_exit_deg
  * IDLE ------------> NO_HEADING ------------> ALIGN -----------------------> DRIVE
  *                                               |   <-----------------------   |
  *                                               |    |err| > align_enter_deg   |
  *                                               +--------------+---------------+
- *                                                              | stop point within threshold
- *                                      with final heading      v      without
+ *                                                              | stop point within threshold (2)
+ *                                      at a pose               v      at the last point
  *                      FINAL_TURN <--------------------------- + ---------------------> ARRIVED
- *                          |                                                              ^
- *                          +---------------- heading within final_tol_deg ----------------+
+ *                          |                                                            ^  ^
+ *                          +----------- heading within tolerance (3), last point -------+  |
+ *                                                                                          |
+ *                      DRIVE ----------> SETTLE ---- mean of settle_fixes within (4) ------+
+ *                           stop point    |  ^
+ *                           near (4)      |  |  correction done, or after nudge_ticks
+ *           off, under settle_nudges (4)  v  |
+ *                                        NUDGE
  *
  * (1) at once if the pose already tracks, else after no_heading_turn_ticks of spin
+ * (2) max(threshold, arrival_min_mm), where the axle stops if braked now; not when precise
+ * (3) heading_tol_deg, or final_tol_deg when 0
+ * (4) precise: the last point, no heading, threshold under arrival_min_mm. Within
+ *     max(threshold, precise_min_mm); near is within half of it, or where it passes closest
  *
- * pose SEEDING  in ALIGN, DRIVE, FINAL_TURN: RECOVER when moving, recover is DRIVE and
- *               the straight stays inside bounds_mm; else NO_HEADING
- * pose LOST     in NO_HEADING, ALIGN, DRIVE, FINAL_TURN, RECOVER: HOLD
+ * batch         intermediate point passed (within pass_mm, or beyond it along its leg): next
+ *               point, same state; FINAL_TURN within tolerance, more points: next point, ALIGN
+ * pose SEEDING  in ALIGN, DRIVE, FINAL_TURN, SETTLE, NUDGE: RECOVER when moving, recover is
+ *               DRIVE and the straight stays inside bounds_mm; else NO_HEADING
+ * pose LOST     in NO_HEADING, ALIGN, DRIVE, FINAL_TURN, SETTLE, NUDGE, RECOVER: HOLD
  * HOLD          tracks: ALIGN; SEEDING: NO_HEADING
  * RECOVER       tracks: ALIGN
  *
- * to FAILED     NO_HEADING after no_heading_ticks                      fail NO_HEADING
- *               ALIGN, FINAL_TURN after turn_ticks                     fail TURN
- *               ALIGN, DRIVE not progress_mm closer in progress_ticks  fail PROGRESS
- *               RECOVER after recover_mm, still SEEDING                fail HEADING_LOST
- *               HOLD after hold_ticks, still LOST                      fail HOLD
+ * to FAILED     NO_HEADING after no_heading_ticks                         fail NO_HEADING
+ *               ALIGN, FINAL_TURN after turn_ticks                        fail TURN
+ *               ALIGN, DRIVE not progress_mm closer in progress_ticks     fail PROGRESS
+ *               RECOVER after recover_mm, still SEEDING                   fail HEADING_LOST
+ *               HOLD after hold_ticks, still LOST                         fail HOLD
+ *               SETTLE off after settle_nudges, or fixes not in by        fail SETTLE
+ *               settle_ticks
  *
- * set_target    IDLE, ARRIVED, FAILED, HOLD, RECOVER: NO_HEADING; ALIGN, FINAL_TURN: ALIGN;
- *               DRIVE and NO_HEADING stay
+ * set_path      IDLE, ARRIVED, FAILED, HOLD, RECOVER: NO_HEADING; ALIGN, FINAL_TURN, SETTLE,
+ *               NUDGE: ALIGN; DRIVE and NO_HEADING stay; an empty batch is a stop
  * stop          any: IDLE
+ *
+ * completion    IN_PROGRESS on set_path; ARRIVED, FAILED on entering them; ABORTED on a
+ *               stop while active
  * @endverbatim
  */
 typedef enum {
