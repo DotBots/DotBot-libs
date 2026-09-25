@@ -444,8 +444,17 @@ static void test_twist(void) {
     CHECK(l == 120 && r == 120, "no turn rate drives both wheels equally, got %.1f %.1f", l, r);
     db_body_twist_t clockwise = { .v_mm_s = 0, .omega_deg_s = 90 };
     db_wheel_control_from_twist(&clockwise, &l, &r);
-    float half = (float)M_PI / 2.0f * DB_TRACK / 2.0f;
+    float half = (float)M_PI / 2.0f * DB_TRACK_EFFECTIVE / 2.0f;
     CHECK(fabsf(l - half) < 1e-3f && fabsf(r + half) < 1e-3f, "clockwise speeds the left wheel up: got %.2f %.2f, want %.2f %.2f", l, r, half, -half);
+    // 150 mm/s at 1 rad/s is a 150 mm radius, on the arc track
+    db_body_twist_t arc = { .v_mm_s = 150, .omega_deg_s = 180.0f / (float)M_PI };
+    db_wheel_control_from_twist(&arc, &l, &r);
+    CHECK(fabsf(l - r - DB_TRACK_EFFECTIVE_ARC) < 1e-3f && fabsf(l + r - 300) < 1e-3f, "a wide arc turns over the arc track: got %.2f %.2f", l, r);
+    // A pivot on the right wheel: its track solves track = f(1), consistently
+    db_body_twist_t pivot = { .v_mm_s = 41, .omega_deg_s = 58 };
+    db_wheel_control_from_twist(&pivot, &l, &r);
+    float want = db_track_effective_mm(l, r);
+    CHECK(fabsf((l - r) - want * 58 * (float)M_PI / 180.0f) < 1e-2f, "a tight turn uses the track its own wheel speeds give: %.2f %.2f over %.2f", l, r, want);
 }
 
 static void test_integral_zone(void) {

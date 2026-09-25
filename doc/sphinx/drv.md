@@ -26,6 +26,7 @@ _api/drv_motors
 _api/drv_move
 _api/drv_n25q128
 _api/drv_pid
+_api/drv_pose_estimator
 _api/drv_protocol
 _api/drv_rgbled
 _api/drv_rgbled_pwm
