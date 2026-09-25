@@ -153,7 +153,40 @@ typedef enum {
     DB_STEERING_RECOVER_DRIVE,  ///< Drive straight on along the last heading
 } db_steering_recover_t;
 
-/// Steering state
+/**
+ * @brief   Steering state
+ *
+ * @verbatim
+ *          set_target             tracks (1)           |err| < align_exit_deg
+ * IDLE ------------> NO_HEADING ------------> ALIGN -----------------------> DRIVE
+ *                                               |   <-----------------------   |
+ *                                               |    |err| > align_enter_deg   |
+ *                                               +--------------+---------------+
+ *                                                              | stop point within threshold
+ *                                      with final heading      v      without
+ *                      FINAL_TURN <--------------------------- + ---------------------> ARRIVED
+ *                          |                                                              ^
+ *                          +---------------- heading within final_tol_deg ----------------+
+ *
+ * (1) at once if the pose already tracks, else after no_heading_turn_ticks of spin
+ *
+ * pose SEEDING  in ALIGN, DRIVE, FINAL_TURN: RECOVER when moving, recover is DRIVE and
+ *               the straight stays inside bounds_mm; else NO_HEADING
+ * pose LOST     in NO_HEADING, ALIGN, DRIVE, FINAL_TURN, RECOVER: HOLD
+ * HOLD          tracks: ALIGN; SEEDING: NO_HEADING
+ * RECOVER       tracks: ALIGN
+ *
+ * to FAILED     NO_HEADING after no_heading_ticks                      fail NO_HEADING
+ *               ALIGN, FINAL_TURN after turn_ticks                     fail TURN
+ *               ALIGN, DRIVE not progress_mm closer in progress_ticks  fail PROGRESS
+ *               RECOVER after recover_mm, still SEEDING                fail HEADING_LOST
+ *               HOLD after hold_ticks, still LOST                      fail HOLD
+ *
+ * set_target    IDLE, ARRIVED, FAILED, HOLD, RECOVER: NO_HEADING; ALIGN, FINAL_TURN: ALIGN;
+ *               DRIVE and NO_HEADING stay
+ * stop          any: IDLE
+ * @endverbatim
+ */
 typedef enum {
     DB_STEERING_IDLE,        ///< No target
     DB_STEERING_NO_HEADING,  ///< Spinning in place until the pose tracks
