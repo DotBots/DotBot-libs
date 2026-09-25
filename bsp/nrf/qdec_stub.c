@@ -32,3 +32,9 @@ int32_t db_qdec_read_and_clear(qdec_t qdec) {
     (void)qdec;
     return 0;
 }
+
+int32_t db_qdec_read_and_clear_dbl(qdec_t qdec, uint32_t *dbl) {
+    (void)qdec;
+    *dbl = 0;
+    return 0;
+}

@@ -75,7 +75,7 @@ int main(void) {
         printf("Speed right motors: %i\n", (int16_t)_pid_right.output);
         puts("");
 
-        db_motors_set_speed((int16_t)_pid_left.output, (int16_t)_pid_right.output);
+        db_motors_set_pwm((int16_t)_pid_left.output, (int16_t)_pid_right.output);
         db_timer_hf_delay_ms(0, PID_SAMPLE_TIME_MS);
     }
 }

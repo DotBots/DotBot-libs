@@ -32,4 +32,5 @@ _api/drv_rgbled_pwm
 _api/drv_tdma_client
 _api/drv_tdma_server
 _api/drv_uzlib
+_api/drv_wheel_control
 ```

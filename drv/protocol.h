@@ -40,6 +40,7 @@ typedef enum {
     DB_PROTOCOL_CMD_XGO_ACTION       = 11,  ///< XGO action command
     DB_PROTOCOL_LH2_PROCESSED_DATA   = 12,  ///< Lighthouse 2 data processed at the DotBot
     DB_PROTOCOL_LH2_CALIBRATION      = 14,  ///< Lighthouse 2 homography matrix after calibration
+    DB_PROTOCOL_CMD_WHEEL_VELOCITY   = 15,  ///< Per-wheel speed setpoints for the wheel-velocity loop
 } protocol_data_type_t;
 
 /// Protocol packet type
@@ -84,6 +85,13 @@ typedef struct __attribute__((packed)) {
     int8_t right_x;  ///< Horizontal coordinate for right side
     int8_t right_y;  ///< Vertical coordinate for right side
 } protocol_move_raw_command_t;
+
+/// DotBot protocol wheel velocity command. Unlike move raw, which is motor
+/// duty, these are speeds the robot closes a loop on.
+typedef struct __attribute__((packed)) {
+    int16_t left_mm_s;   ///< Left wheel speed in mm/s, positive forward
+    int16_t right_mm_s;  ///< Right wheel speed in mm/s, positive forward
+} protocol_wheel_velocity_command_t;
 
 /// DotBot protocol RGB LED command
 typedef struct __attribute__((packed)) {

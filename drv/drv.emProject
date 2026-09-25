@@ -182,6 +182,15 @@
     <file file_name="tdma_server.c" />
     <file file_name="../tdma_server.h" />
   </project>
+  <project Name="00drv_wheel_control">
+    <configuration
+      Name="Common"
+      project_dependencies=""
+      project_directory="."
+      project_type="Library" />
+    <file file_name="wheel_control/wheel_control.c" />
+    <file file_name="wheel_control.h" />
+  </project>
   <project Name="00drv_uzlib">
     <configuration
       Name="Common"

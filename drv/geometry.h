@@ -16,6 +16,9 @@
  * nRF headers. Keep this header free of hardware dependencies so both builds
  * can read it.
  *
+ * Units across drv/: lengths in millimetres, speeds in mm/s, angles in
+ * degrees. Radians and metres appear only inside a function that converts.
+ *
  * @{
  * @file
  * @copyright Inria, 2026
@@ -25,22 +28,18 @@
 #include <math.h>
 
 #if defined(BOARD_DOTBOT_V3)
-/// Wheel diameter in mm, caliper-measured on a v3
-#define DB_WHEEL_DIAMETER (44.0f)
+/// Wheel diameter in mm, caliper-measured unloaded on a v3 (2026-09-23)
+#define DB_WHEEL_DIAMETER (43.0f)
 
 /// Distance between the two wheel mid-planes in mm. The caliper reads 77; 78 is
 /// carried here so the C and Python models of the robot agree exactly.
 #define DB_TRACK (78.0f)
 
-/// Quadrature counts per motor shaft revolution.
-///
-/// Bench-measured on a v3 with the 01bsp_qdec example: pushing the robot
-/// through one wheel turn, about 140 mm, read 1400 counts on each wheel
-/// (two runs, 1399/1401 and 1408/1392, both averaging 1400.0). Dividing that
-/// by the 50:1 reduction gives the 28 here. It is also 7 pulses per
-/// revolution decoded x4, which is what the QDEC does, but that pulse count
-/// is inferred from the measurement rather than read from a datasheet.
+/// Nominal quadrature counts per motor shaft revolution: 7 pulses decoded x4
 #define DB_ENCODER_CPR (28.0f)
+
+/// Hand-counted, within 0.14% of the measured 1430 ± 1.5 counts per wheel turn; sold as 50:1
+#define DB_GEAR_RATIO (51.0f)
 
 /// Distance in mm from the wheel-axle midpoint, which is where the robot turns
 /// about, to the lighthouse photodiode. Rotating the robot therefore moves the
@@ -66,11 +65,10 @@
 #define DB_WHEEL_DIAMETER  (40.0f)  ///< Wheel diameter in mm
 #define DB_TRACK           (90.0f)  ///< Distance between the two wheel mid-planes in mm
 #define DB_ENCODER_CPR     (12.0f)  ///< Quadrature counts per motor shaft revolution
+#define DB_GEAR_RATIO      (50.0f)  ///< Motor shaft revolutions per wheel revolution
 #define DB_LH2_LEVER_ARM   (0.0f)   ///< Axle midpoint to photodiode, in mm
 #define DB_LH2_LEVER_ANGLE (0.0f)   ///< Direction of that offset, degrees clockwise from forward
 #endif
-
-#define DB_GEAR_RATIO (50.0f)  ///< Motor shaft revolutions per wheel revolution
 
 /// mm of wheel travel per encoder count
 #define DB_MM_PER_COUNT (((float)M_PI * DB_WHEEL_DIAMETER) / (DB_ENCODER_CPR * DB_GEAR_RATIO))

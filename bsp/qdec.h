@@ -55,4 +55,19 @@ int32_t db_qdec_read(qdec_t qdec);
  */
 int32_t db_qdec_read_and_clear(qdec_t qdec);
 
+/**
+ * @brief   Read and clear the QDEC accumulator and its double-transition count
+ *
+ * A double transition is two quadrature steps inside one sample period. The
+ * peripheral cannot tell their direction, so it counts them apart from the
+ * accumulator; a caller wanting every step credits them in the direction the
+ * accumulator moved. The count is 4 bits wide, so read it before 15 build up.
+ *
+ * @param[in]   qdec            Index of the QDEC peripheral to read and reset
+ * @param[out]  dbl             Double transitions since the last clear
+ *
+ * @return  the signed accumulator, as db_qdec_read_and_clear() returns it
+ */
+int32_t db_qdec_read_and_clear_dbl(qdec_t qdec, uint32_t *dbl);
+
 #endif

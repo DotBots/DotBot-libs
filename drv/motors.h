@@ -14,6 +14,7 @@
  * @}
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <nrf.h>
 
@@ -30,27 +31,47 @@
 void db_motors_init(void);
 
 /**
- * @brief Set the percentage speed of the right and left motors on the DotBot
+ * @brief Set the duty cycle of the left and right motors
  *
- *  Each motor input variable receives a percentage speed from -100 to 100.
- *  Positive values turn the motor forward.
- *  Negative values turn the motor backward.
- *  Zero, stops the motor
+ *  Each value is the H-bridge duty in percent of the 10 kHz PWM period, from
+ *  -100 to 100, clamped to that range. It is not a speed: the wheel speed a
+ *  duty produces depends on load, surface and battery. Positive drives the
+ *  motor forward, negative backward. Zero coasts, as db_motors_coast() does.
  *
- * @param[in] l_speed speed of the left motor [-100, 100]
- * @param[in] r_speed speed of the left motor [-100, 100]
+ * @param[in] l_pwm duty of the left motor [-100, 100]
+ * @param[in] r_pwm duty of the right motor [-100, 100]
  */
-void db_motors_set_speed(int16_t l_speed, int16_t r_speed);
+void db_motors_set_pwm(int16_t l_pwm, int16_t r_pwm);
+
+/**
+ * @brief Let both motors freewheel
+ *
+ *  Drives both inputs of each H-bridge low, so the outputs go high-impedance
+ *  and the wheels turn freely.
+ */
+void db_motors_coast(void);
 
 /**
  * @brief Short the motor windings so the wheels resist being turned
  *
  *  Drives both inputs of each H-bridge high, which is the DRV8833's brake
- *  state. Setting a speed of zero instead leaves both inputs low, which is
- *  coast: the outputs go high-impedance and the wheels freewheel.
+ *  state, as opposed to db_motors_coast().
  *
- *  Released by any subsequent db_motors_set_speed() call.
+ *  Released by any subsequent db_motors_set_pwm() call.
  */
 void db_motors_brake(void);
+
+/**
+ * @brief Set the duty of each motor, or brake it
+ *
+ *  As db_motors_set_pwm(), except that a motor whose brake flag is set is
+ *  braked as db_motors_brake() does, and its duty is ignored.
+ *
+ * @param[in] l_pwm   duty of the left motor [-100, 100]
+ * @param[in] r_pwm   duty of the right motor [-100, 100]
+ * @param[in] l_brake brake the left motor instead
+ * @param[in] r_brake brake the right motor instead
+ */
+void db_motors_set_pwm_brake(int16_t l_pwm, int16_t r_pwm, bool l_brake, bool r_brake);
 
 #endif
