@@ -41,6 +41,7 @@ typedef enum {
     DB_PROTOCOL_LH2_PROCESSED_DATA   = 12,  ///< Lighthouse 2 data processed at the DotBot
     DB_PROTOCOL_LH2_CALIBRATION      = 14,  ///< Lighthouse 2 homography matrix after calibration
     DB_PROTOCOL_CMD_WHEEL_VELOCITY   = 15,  ///< Per-wheel speed setpoints for the wheel-velocity loop
+    DB_PROTOCOL_CMD_MAX_SPEED        = 17,  ///< Cruise speed limit for waypoint moves
 } protocol_data_type_t;
 
 /// Protocol packet type
@@ -93,6 +94,12 @@ typedef struct __attribute__((packed)) {
     int16_t right_mm_s;  ///< Right wheel speed in mm/s, positive forward
 } protocol_wheel_velocity_command_t;
 
+/// DotBot protocol max speed command: the cruise speed waypoint moves may
+/// use, until the next one or a reset. 0 restores the firmware default.
+typedef struct __attribute__((packed)) {
+    uint16_t max_speed_mm_s;  ///< mm/s
+} protocol_max_speed_command_t;
+
 /// DotBot protocol RGB LED command
 typedef struct __attribute__((packed)) {
     uint8_t r;  ///< Red component value
@@ -111,6 +118,62 @@ typedef struct __attribute__((packed)) {
     uint8_t                 length;                    ///< Number of waypoints
     protocol_lh2_location_t points[DB_MAX_WAYPOINTS];  ///< Array containing a list of lh2 point coordinates
 } protocol_lh2_waypoints_t;
+
+/// Heading of a waypoint that has none, in its heading_cdeg field
+#define DB_WAYPOINT_NO_HEADING (0x7FFF)
+
+/// Trailer after the points of DB_PROTOCOL_LH2_WAYPOINTS (threshold u16,
+/// count u8, then count protocol_lh2_location_t), followed by one int16
+/// heading per point in centidegrees, 0 facing +y and clockwise positive, or
+/// DB_WAYPOINT_NO_HEADING. Every (x, y) is a position for the axle midpoint; a
+/// point with a heading is a pose, where the robot turns to the heading. Apps
+/// that read only threshold, count and points ignore the trailer.
+typedef struct __attribute__((packed)) {
+    uint8_t  batch_id;         ///< Echoed in the advertisement; a batch repeating the current id is ignored; 0 for none
+    uint8_t  heading_tol_deg;  ///< Tolerance of the headings, degrees; 0 for the firmware default
+    uint16_t pass_mm;          ///< Radius the axle passes an intermediate point within, mm; 0 for the firmware default
+} protocol_lh2_waypoints_trailer_t;
+_Static_assert(sizeof(protocol_lh2_waypoints_trailer_t) == 4, "protocol_lh2_waypoints_trailer_t is a wire format");
+
+/// How the last waypoint batch stands, in the DotBot advertisement's trailer
+typedef enum {
+    DB_WAYPOINTS_NONE        = 0,  ///< No batch since boot
+    DB_WAYPOINTS_IN_PROGRESS = 1,  ///< Driving, turning or holding for a lost pose
+    DB_WAYPOINTS_ARRIVED     = 2,  ///< Stopped at the last point, latched
+    DB_WAYPOINTS_FAILED      = 3,  ///< Gave up; the reason is a protocol_waypoints_fail_t
+    DB_WAYPOINTS_ABORTED     = 4,  ///< Stopped by a command; the reason is a protocol_waypoints_abort_t
+} protocol_waypoints_status_t;
+
+/// Why a batch FAILED
+typedef enum {
+    DB_WAYPOINTS_FAIL_NO_HEADING   = 1,  ///< No heading after the start-up spin
+    DB_WAYPOINTS_FAIL_TURN         = 2,  ///< A turn in place took too long
+    DB_WAYPOINTS_FAIL_PROGRESS     = 3,  ///< Stopped getting closer
+    DB_WAYPOINTS_FAIL_HEADING_LOST = 4,  ///< Heading lost mid-move and not re-acquired
+    DB_WAYPOINTS_FAIL_HOLD         = 5,  ///< Position lost too long
+    DB_WAYPOINTS_FAIL_SETTLE       = 6,  ///< Could not settle within a precise threshold
+} protocol_waypoints_fail_t;
+
+/// Why a batch was ABORTED
+typedef enum {
+    DB_WAYPOINTS_ABORT_STOP         = 1,  ///< An empty batch
+    DB_WAYPOINTS_ABORT_DIRECT       = 2,  ///< A move raw or wheel velocity command
+    DB_WAYPOINTS_ABORT_CONTROL_MODE = 3,  ///< A control mode command
+} protocol_waypoints_abort_t;
+
+/// Trailer after the waypoint index of DB_PROTOCOL_DOTBOT_ADVERTISEMENT
+typedef struct __attribute__((packed)) {
+    uint8_t  status;          ///< protocol_waypoints_status_t
+    uint8_t  reason;          ///< protocol_waypoints_fail_t or protocol_waypoints_abort_t, by status; else 0
+    uint8_t  batch_id;        ///< Of the last batch accepted, an empty one included
+    uint8_t  max_speed_10mm;  ///< Cruise speed limit in force, in units of 10 mm/s
+    uint16_t axle_x;          ///< Estimated axle midpoint, mm; DB_AXLE_UNKNOWN without a heading
+    uint16_t axle_y;          ///< Estimated axle midpoint, mm; DB_AXLE_UNKNOWN without a heading
+} protocol_waypoints_report_t;
+_Static_assert(sizeof(protocol_waypoints_report_t) == 8, "protocol_waypoints_report_t is a wire format");
+
+/// Axle coordinate of a waypoint report while the pose has no heading
+#define DB_AXLE_UNKNOWN (0xFFFF)
 
 typedef struct __attribute__((packed)) {
     uint8_t basestation_index;        ///< which LH basestation is this homography for?
