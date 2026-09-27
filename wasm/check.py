@@ -1,5 +1,5 @@
 """Check build/wasm/dotbot_control.wasm: no imports, the ABI the header declares,
-and a waypoint batch replayed to a known trace.
+the geometry it was built with, and a waypoint batch replayed to a known trace.
 
     make wasm
     python wasm/check.py            # checks; exit status 1 on any failure
@@ -26,7 +26,7 @@ import numpy as np
 import wasmtime
 
 WASM = Path(__file__).resolve().parent.parent / "build" / "wasm" / "dotbot_control.wasm"
-ABI_VERSION = 1
+ABI_VERSION = 2
 GOLDEN = "3707b44e8c974d16575b6a19d3cb48d268bd295df3c8a4b827405b76716faa78"
 
 INPUT = np.dtype(
@@ -47,6 +47,20 @@ REPORT = np.dtype(
      ("waypoint_index", "u1"), ("waypoint_count", "u1"), ("batch_id", "u1"), ("status", "u1"),
      ("reason", "u1"), ("max_speed_10mm", "u1")]
 )
+GEOMETRY = np.dtype(
+    [(name, "<f4") for name in (
+        "wheel_diameter_mm", "track_mm", "encoder_cpr", "gear_ratio", "mm_per_count", "lever_arm_mm",
+        "lever_angle_deg", "lever_arm_effective_mm", "track_effective_mm", "track_effective_arc_mm",
+        "track_effective_arc_ratio")]
+)
+EXPORTS = {
+    "abi_version", "sizeof_state", "sizeof_input", "sizeof_output", "sizeof_report", "sizeof_geometry",
+    "rx_max_bytes", "advertisement_bytes", "geometry", "fleet_init", "fleet_count", "fleet_inputs",
+    "fleet_outputs", "fleet_report_buffer", "fleet_battery_buffer", "fleet_advertisements_buffer",
+    "fleet_rx_buffer", "fleet_advertisement_buffer", "fleet_rx", "fleet_step", "fleet_seed", "fleet_reports",
+    "fleet_advertisement", "fleet_advertisements", "fleet_set_min_tx_interval",
+}
+ADVERTISEMENT_BYTES = 42
 
 STATES = ["IDLE", "NO_HEADING", "ALIGN", "DRIVE", "FINAL_TURN", "ARRIVED", "HOLD",
           "FAILED", "RECOVER", "SETTLE", "NUDGE"]
@@ -97,6 +111,18 @@ class Core:
         self.write(self.inputs, inputs.tobytes())
         self("fleet_step", self.inputs, self.outputs)
         return np.frombuffer(self.read(self.outputs, OUTPUT.itemsize * self.count), OUTPUT)
+
+    def geometry(self):
+        return np.frombuffer(self.read(self("geometry"), GEOMETRY.itemsize), GEOMETRY)[0]
+
+    def advertisements(self, battery):
+        """(indices, packets) of the advertisements the last step asked for."""
+        battery_buffer, buffer = self("fleet_battery_buffer"), self("fleet_advertisements_buffer")
+        self.write(battery_buffer, np.asarray(battery, "<u2").tobytes())
+        n = self("fleet_advertisements", battery_buffer, buffer)
+        data = self.read(buffer, n * (4 + ADVERTISEMENT_BYTES))
+        indices = np.frombuffer(data[:4 * n], "<u4")
+        return indices, np.frombuffer(data[4 * n:], np.uint8).reshape(n, ADVERTISEMENT_BYTES)
 
     def report(self):
         self("fleet_reports", self.reports)
@@ -178,6 +204,47 @@ class Plant:
         return (counts[0], counts[1], self.fix[0], self.fix[1], self.fix[2], 1)
 
 
+def seeded(core, ticks=1500):
+    """The replay's batch from a robot seeded where the plant starts: steering state sequence."""
+    core.init(1)
+    core("fleet_seed", 0, *START)
+    core.rx(0, waypoints_packet(POINTS, THRESHOLD_MM, 1))
+    plant = Plant(*START)
+    inputs = np.zeros(1, INPUT)
+    states = []
+    for _ in range(ticks):
+        inputs[0] = plant.step()
+        plant.apply(core.step(inputs)[0])
+        state = STATES[core.report()[0]["steering_state"]]
+        if state != "IDLE" and (not states or states[-1] != state):
+            states.append(state)
+    return states
+
+
+def batched(core, count=8, ticks=60):
+    """Advertisements over ticks from both exports: (batched, one by one), each a list of (tick, index, packet)."""
+    runs = []
+    for batch in (True, False):
+        core.init(count)
+        inputs = np.zeros(count, INPUT)
+        inputs["elapsed_ticks"] = 1 + np.arange(count) * 7
+        inputs["counts_left"] = np.arange(count)
+        battery = 3000 + np.arange(count)
+        adverts = []
+        for tick in range(ticks):
+            out = core.step(inputs)
+            inputs["elapsed_ticks"] = 1
+            if batch:
+                indices, packets = core.advertisements(battery)
+                adverts += [(tick, int(i), bytes(p)) for i, p in zip(indices, packets)]
+            else:
+                for i in np.flatnonzero(out["advertise"]):
+                    n = core("fleet_advertisement", int(i), int(battery[i]), core("fleet_advertisement_buffer"))
+                    adverts.append((tick, int(i), bytes(core.read(core("fleet_advertisement_buffer"), n))))
+        runs.append(adverts)
+    return runs
+
+
 def replay(core, ticks=1500):
     core.init(1)
     core.rx(0, waypoints_packet(POINTS, THRESHOLD_MM, 1))
@@ -210,9 +277,23 @@ def check(core, update):
             failures.append(what)
 
     expect(len(core.module.imports) == 0, f"no imports ({[(i.module, i.name) for i in core.module.imports]})")
+    exports = {e.name for e in core.module.exports} - {"memory", "_initialize"}
+    expect(exports == EXPORTS, f"exports as listed (missing {EXPORTS - exports}, extra {exports - EXPORTS})")
     expect(core("abi_version") == ABI_VERSION, f"ABI version {core('abi_version')}")
-    for name, dtype in (("input", INPUT), ("output", OUTPUT), ("report", REPORT)):
+    for name, dtype in (("input", INPUT), ("output", OUTPUT), ("report", REPORT), ("geometry", GEOMETRY)):
         expect(core(f"sizeof_{name}") == dtype.itemsize, f"sizeof {name} {core(f'sizeof_{name}')} == {dtype.itemsize}")
+
+    g = core.geometry()
+    expect(math.isclose(g["mm_per_count"], MM_PER_COUNT, rel_tol=1e-6) and g["lever_arm_effective_mm"] == LEVER_MM
+           and (g["track_effective_mm"], g["track_effective_arc_mm"]) == (TRACK, TRACK_ARC)
+           and math.isclose(g["track_effective_arc_ratio"], TRACK_RATIO, rel_tol=1e-6),
+           "geometry is the v3 one this plant models")
+
+    states = seeded(core)
+    print(f"     seeded: states {'-'.join(states)}")
+    expect("NO_HEADING" not in states[1:] and states[-1] == "ARRIVED", "seeded, drives without spinning for a heading")
+    batch, single = batched(core)
+    expect(len(batch) > 8 and batch == single, f"batched advertisements match one-by-one ({len(batch)})")
 
     digest, states, arrived, miss, report = replay(core)
     print(f"     states {'-'.join(states)}, arrived at tick {arrived}, missed by {miss:.1f} mm")

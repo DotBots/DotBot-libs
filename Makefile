@@ -128,11 +128,12 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
 	$(TEST_BUILD_DIR)/test_dotbot_control
+	$(TEST_BUILD_DIR)/test_dotbot_control_fleet
 
 $(TEST_BUILD_DIR)/test_wheel_control: tests/test_wheel_control.c drv/wheel_control/wheel_control.c drv/wheel_control.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
@@ -153,6 +154,10 @@ $(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c $(CONTROL_SRC
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_dotbot_control.c $(CONTROL_SRCS) -lm
 
+$(TEST_BUILD_DIR)/test_dotbot_control_fleet: tests/test_dotbot_control_fleet.c wasm/dotbot_control_wasm.c wasm/dotbot_control_wasm.h $(CONTROL_SRCS) $(CONTROL_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Iwasm -o $@ tests/test_dotbot_control_fleet.c wasm/dotbot_control_wasm.c $(CONTROL_SRCS) -lm
+
 # The control core as a WebAssembly reactor with no imports, for simulators;
 # check it with wasm/check.py (see its docstring)
 WASI_SDK ?= build/wasi-sdk
@@ -161,7 +166,7 @@ WASM_CFLAGS ?= --target=wasm32-wasip1 -mexec-model=reactor -std=gnu11 -Wall -Wex
 
 wasm: $(WASM_BUILD_DIR)/dotbot_control.wasm
 
-$(WASM_BUILD_DIR)/dotbot_control.wasm: wasm/dotbot_control_wasm.c $(CONTROL_SRCS) $(CONTROL_HDRS)
+$(WASM_BUILD_DIR)/dotbot_control.wasm: wasm/dotbot_control_wasm.c wasm/dotbot_control_wasm.h $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@if [ ! -x "$(WASI_SDK)/bin/clang" ]; then \
 		echo "wasm: no wasi-sdk clang at $(WASI_SDK)/bin/clang; run wasm/fetch-wasi-sdk.sh" >&2; \
 		exit 1; \
