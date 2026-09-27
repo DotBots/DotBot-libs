@@ -64,6 +64,32 @@ jobs:
       - name: Build documentation
         run: make doc
 
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Fetch wasi-sdk
+        run: wasm/fetch-wasi-sdk.sh
+      - name: Build the control core as WebAssembly
+        run: make wasm
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+      - name: Install check dependencies
+        run: pip install "wasmtime>=49,<55" numpy
+      - name: Check the wasm build
+        run: python wasm/check.py
+      - name: Upload the wasm build
+        if: >-
+          github.event_name == 'push' &&
+          startsWith(github.event.ref, 'refs/tags')
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotbot_control.wasm
+          path: build/wasm/dotbot_control.wasm
+
   # Disable Docker build for now because SEGGER requires authentication
   # to download SEGGER Embedded Studio
   # docker:
@@ -77,7 +103,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # needs: [docker, doc, style, build-success]
-    needs: [doc, style, host-tests, build-success]
+    needs: [doc, style, host-tests, wasm, build-success]
     permissions:
       contents: write
     if: >-
