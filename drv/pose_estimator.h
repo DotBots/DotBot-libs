@@ -39,7 +39,9 @@
  * heading stays unknown until motion re-acquires it. The same fixes arriving
  * sooner after motion, within reanchor_mm of the estimate, are slip the
  * odometry missed: the position is moved onto them, the heading is kept and
- * its variance raised by reanchor_heading_var_deg2.
+ * its variance raised by reanchor_heading_var_deg2. While LOST, a chain of
+ * kidnap_fixes consistent fixes with the wheels standing for kidnap_settle_ticks
+ * is taken for a kidnap too, and returns to SEEDING with that chain.
  *
  * No hardware calls, so the module also builds on the host for its tests.
  *

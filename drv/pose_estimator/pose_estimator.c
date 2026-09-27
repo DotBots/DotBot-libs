@@ -251,6 +251,17 @@ static void _kidnap_check(db_pose_estimator_t *est, float x_mm, float y_mm) {
     est->kidnaps++;
 }
 
+/// While LOST, a chain of kidnap_fixes consistent fixes with the wheels standing
+/// for the settle time is a robot put down by hand: SEEDING, keeping the chain
+static void _lost_kidnap_check(db_pose_estimator_t *est) {
+    const db_pose_estimator_conf_t *conf = est->conf;
+    if (conf->kidnap_fixes == 0 || est->chain_count < conf->kidnap_fixes || est->still_ticks == 0 || est->still_ticks < conf->kidnap_settle_ticks) {
+        return;
+    }
+    est->status = DB_POSE_ESTIMATOR_SEEDING;
+    est->kidnaps++;
+}
+
 /// Gated EKF update with h(x) = axle + lever(theta), on the fix moved forward
 /// by the photodiode travel since it was captured
 static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float x_mm, float y_mm) {
@@ -437,6 +448,7 @@ db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, fl
             result = _chain_add(est, x_mm, y_mm);
             if (result == DB_POSE_ESTIMATOR_CHAINED) {
                 result = DB_POSE_ESTIMATOR_REJECTED;
+                _lost_kidnap_check(est);
             }
         }
     }
