@@ -200,6 +200,15 @@
     <file file_name="steering/steering.c" />
     <file file_name="steering.h" />
   </project>
+  <project Name="00drv_dotbot_control">
+    <configuration
+      Name="Common"
+      project_dependencies="00drv_pose_estimator;00drv_steering;00drv_wheel_control"
+      project_directory="."
+      project_type="Library" />
+    <file file_name="dotbot_control/dotbot_control.c" />
+    <file file_name="dotbot_control.h" />
+  </project>
   <project Name="00drv_uzlib">
     <configuration
       Name="Common"
