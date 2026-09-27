@@ -26,6 +26,9 @@
 #define MAX_SPEED_MIN_MM_S (20U)
 #define MAX_SPEED_MAX_MM_S (700U)
 
+/// Heading uncertainty db_control_seed() starts the estimator with
+#define SEED_HEADING_SD_DEG (2.0f)
+
 /// Coordinates above this are the secure side reporting no usable solve.
 #define POSITION_INVALID_MM (100000U)
 
@@ -252,6 +255,10 @@ void db_control_init(db_control_t *control, const db_control_conf_t *conf) {
     control->drive_mode          = DB_CONTROL_DRIVE_IDLE;
     control->abort_reason        = DB_WAYPOINTS_ABORT_STOP;
     control->advert_period_ticks = _advert_period_ticks(0);
+}
+
+void db_control_seed(db_control_t *control, float axle_x_mm, float axle_y_mm, float heading_deg) {
+    db_pose_estimator_seed(&control->estimator, axle_x_mm, axle_y_mm, heading_deg, SEED_HEADING_SD_DEG);
 }
 
 void db_control_rx(db_control_t *control, const uint8_t *packet, size_t length) {

@@ -185,7 +185,7 @@ static void _sim_init(sim_t *s, int seeded) {
     _plant_init(&s->plant, 1000.0f, 1000.0f, 0.0f, 1.0f, 12345u);
     db_control_init(&s->control, &db_control_default_conf);
     if (seeded) {
-        db_pose_estimator_seed(&s->control.estimator, 1000.0f, 1000.0f, 0.0f, 2.0f);
+        db_control_seed(&s->control, 1000.0f, 1000.0f, 0.0f);
     }
 }
 
@@ -297,6 +297,33 @@ static void test_batch_seeded(void) {
     CHECK(fabsf(report.axle_x_mm - s.plant.x) < 5.0f && fabsf(report.axle_y_mm - s.plant.y) < 5.0f, "seeded: estimate within 5 mm of truth, %.1f %.1f vs %.1f %.1f", report.axle_x_mm, report.axle_y_mm, s.plant.x, s.plant.y);
     CHECK(report.axle_x == (uint16_t)lroundf(report.axle_x_mm), "seeded: advertised axle is the estimate");
     CHECK(report.brake_left && report.brake_right, "seeded: braked once arrived");
+}
+
+static void test_seed(void) {
+    db_control_t        control;
+    db_control_report_t report;
+    db_control_init(&control, &db_control_default_conf);
+    db_control_report(&control, &report);
+    CHECK(report.direction == DB_CONTROL_DIRECTION_INVALID && report.axle_x == DB_AXLE_UNKNOWN, "seed: no heading and no axle from boot");
+
+    db_control_seed(&control, 2000.0f, 1500.0f, 90.0f);
+    db_control_report(&control, &report);
+    CHECK(report.estimator_status == DB_POSE_ESTIMATOR_TRACKING, "seed: tracking at once, status %u", report.estimator_status);
+    CHECK(report.direction == 90, "seed: advertises the heading, %d", report.direction);
+    CHECK(report.axle_x == 2000 && report.axle_y == 1500, "seed: advertises the axle, %u %u", report.axle_x, report.axle_y);
+    // Facing 90, body-forward is -x, so the photodiode sits the lever arm toward -x
+    CHECK(report.sensor_x == (uint32_t)lroundf(2000.0f - DB_LH2_LEVER_ARM_EFFECTIVE) && report.sensor_y == 1500, "seed: photodiode the lever arm ahead, %u %u", report.sensor_x, report.sensor_y);
+    CHECK(report.drive_mode == DB_CONTROL_DRIVE_IDLE && report.steering_state == DB_STEERING_IDLE, "seed: leaves the robot idle");
+
+    sim_t s;
+    _sim_init(&s, 0);
+    _plant_init(&s.plant, 1000.0f, 1000.0f, 90.0f, 1.0f, 12345u);
+    db_control_seed(&s.control, 1000.0f, 1000.0f, 90.0f);
+    _send_batch(&s, 1);
+    _sim_run(&s, 1500);
+    CHECK(s.heading_tick == 10, "seed: a batch leaves NO_HEADING at the first steering step, tick %u", s.heading_tick);
+    CHECK(s.arrived_tick > 0 && s.arrived_tick < 1000, "seed: arrives facing away from the first leg, took %u ticks", s.arrived_tick);
+    CHECK(_miss(&s, 1500, 1000) < 30.0f + 5.0f, "seed: stops within the threshold, missed by %.1f", _miss(&s, 1500, 1000));
 }
 
 static void test_batch_from_boot(void) {
@@ -541,6 +568,7 @@ static void test_many_robots_independent(void) {
 
 int main(void) {
     test_batch_seeded();
+    test_seed();
     test_batch_from_boot();
     test_batch_dedup();
     test_max_speed();

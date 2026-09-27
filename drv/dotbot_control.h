@@ -43,7 +43,7 @@
 //=========================== defines ==========================================
 
 /// Version of the structs and functions below, for callers loading a built copy
-#define DB_CONTROL_ABI_VERSION (1U)
+#define DB_CONTROL_ABI_VERSION (2U)
 
 /// Period of one scheduler tick
 #define DB_CONTROL_TICK_MS (10U)
@@ -172,6 +172,18 @@ extern const db_control_conf_t db_control_default_conf;
  * @param[in]   conf        Gains, which must outlive the robot
  */
 void db_control_init(db_control_t *control, const db_control_conf_t *conf);
+
+/**
+ * @brief   Set the pose outright, heading known, and start the estimator TRACKING
+ *
+ * An entry point for simulators and tests; the firmware does not call it.
+ *
+ * @param[in,out]   control         Robot state
+ * @param[in]       axle_x_mm       Axle midpoint
+ * @param[in]       axle_y_mm       Axle midpoint
+ * @param[in]       heading_deg     Heading, 0 facing +y, clockwise positive
+ */
+void db_control_seed(db_control_t *control, float axle_x_mm, float axle_y_mm, float heading_deg);
 
 /**
  * @brief   Apply one command, received since the previous tick
