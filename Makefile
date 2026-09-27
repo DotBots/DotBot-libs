@@ -97,7 +97,7 @@ ARTIFACT_HEX = $(ARTIFACT_ELF:.elf=.hex)
 ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 
-.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test
+.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test wasm
 
 all: $(PROJECTS)
 
@@ -152,6 +152,19 @@ CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_
 $(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_dotbot_control.c $(CONTROL_SRCS) -lm
+
+# The control core as a WebAssembly reactor with no imports, for simulators;
+# check it with wasm/check.py (see its docstring)
+WASI_SDK ?= /home/gfedrech/Developer/inria/tmp/sim-c-wasm/wasi-sdk-34.0-x86_64-linux
+WASM_BUILD_DIR ?= build/wasm
+WASM_CFLAGS ?= --target=wasm32-wasip1 -mexec-model=reactor -std=gnu11 -Wall -Wextra -Wpedantic -Werror -O2 -ffp-contract=off -DBOARD_DOTBOT_V3 -Idrv
+
+wasm: $(WASM_BUILD_DIR)/dotbot_control.wasm
+
+$(WASM_BUILD_DIR)/dotbot_control.wasm: wasm/dotbot_control_wasm.c $(CONTROL_SRCS) $(CONTROL_HDRS)
+	@mkdir -p $(WASM_BUILD_DIR)
+	"$(WASI_SDK)/bin/clang" $(WASM_CFLAGS) -o $@ wasm/dotbot_control_wasm.c $(CONTROL_SRCS) -Wl,--strip-all
+	@ls -l $@
 
 artifacts: $(ARTIFACT_PROJECTS)
 	@mkdir -p artifacts
