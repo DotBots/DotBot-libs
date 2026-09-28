@@ -7,9 +7,10 @@
 #   wasm/fetch-wasi-sdk.sh
 #
 # Override the destination with WASI_SDK_DEST; override the version by
-# editing WASI_SDK_VERSION and adding a hash line (compute it with
-# `sha256sum` against the release asset - wasi-sdk does not publish a
-# checksums file).
+# editing WASI_SDK_VERSION and adding a hash line, taken from the per-asset
+# digests GitHub publishes for the release:
+#   gh api repos/WebAssembly/wasi-sdk/releases/tags/wasi-sdk-<N> \
+#     --jq '.assets[] | "\(.name) \(.digest)"'
 set -euo pipefail
 
 WASI_SDK_VERSION=34.0
@@ -58,7 +59,11 @@ trap 'rm -rf "$tmpdir"' EXIT
 echo "fetch-wasi-sdk.sh: downloading $archive"
 curl -fSL -o "$tmpdir/$archive" "$RELEASE_URL/$archive"
 
-echo "$sha256  $tmpdir/$archive" | sha256sum -c -
+if command -v sha256sum >/dev/null 2>&1; then
+    echo "$sha256  $tmpdir/$archive" | sha256sum -c -
+else
+    echo "$sha256  $tmpdir/$archive" | shasum -a 256 -c -
+fi
 
 rm -rf "$WASI_SDK_DEST"
 mkdir -p "$WASI_SDK_DEST"
