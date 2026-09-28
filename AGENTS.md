@@ -36,9 +36,10 @@ make format            # clang-format in-place
 make check-format      # clang-format --dry-run
 make doc               # Sphinx + Doxygen
 make clean / distclean
+make test              # host-side unit tests (see below)
 ```
 
-CI: `.github/workflows/build.yml` runs the matrix above plus style + doc. **No unit tests; no host-side test runner.** CI only verifies it compiles.
+CI: `.github/workflows/build.yml` runs the matrix above plus style + doc. **`make test` builds and runs host-side unit tests** for `drv/wheel_control`, `drv/pose_estimator` and `drv/steering` against a host compiler, wired into CI as the `host-tests` job; everything else is still validated only by "does it compile."
 
 ## Cross-repo dependencies
 
@@ -63,7 +64,7 @@ CI: `.github/workflows/build.yml` runs the matrix above plus style + doc. **No u
 - **`drv/protocol.h`** — outdated remote-control API. Replacing it touches many sites; the corresponding Python mirror lives in `PyDotBot/dotbot/protocol.py`.
 - **TDMA stack is still alive**: `drv/tdma_client/`, `drv/tdma_server/` (with `_default` and `_nrf5340_app` variants) plus `01drv_tdma_client` / `01drv_tdma_server` projects. The plan is to replace TDMA with Mari integration. **Greenfield**: no half-merged refactor in progress.
 - **`Makefile` references projects that don't live here** (`03app_dotbot`, `03app_dotbot_gateway*`, `03app_sailbot`, `03app_xgo`, `03app_freebot`, `03app_nrf5340_net`, `03app_lh2_mini_mote*`). They live in `DotBot-firmware`. Either dead config or out-of-sync filter.
-- **No host-side unit tests at all.** Every change is validated only by "does it compile across 6 targets × 2 configs."
+- **Host-side unit tests cover only `wheel_control`, `pose_estimator` and `steering`** (`make test`). Everything else is still validated only by "does it compile across 6 targets × 2 configs."
 - **Docker CI build disabled** (commented out, awaiting SEGGER auth).
 
 ## Branch policy
