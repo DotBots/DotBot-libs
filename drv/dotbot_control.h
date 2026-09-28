@@ -176,7 +176,7 @@ void db_control_init(db_control_t *control, const db_control_conf_t *conf);
 /**
  * @brief   Set the pose outright, heading known, and start the estimator TRACKING
  *
- * An entry point for simulators and tests; the firmware does not call it.
+ * An entry point for simulators and tests.
  *
  * @param[in,out]   control         Robot state
  * @param[in]       axle_x_mm       Axle midpoint
