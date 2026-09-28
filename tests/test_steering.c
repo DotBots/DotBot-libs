@@ -135,6 +135,9 @@ typedef struct {
     int      fixes;          ///< LH2 on
     int      blocked;        ///< wheels held still whatever the setpoint
     int      airborne;       ///< wheels turn and count, the robot stays put
+    float    fix_stretch;    ///< fixes move this many times the photodiode's motion about the start; 0 for 1
+    float    fix_x0;         ///< start of that motion, mm
+    float    fix_y0;         ///< start of that motion, mm
     float    noise_mm;       ///< LH2 noise, sd
 } robot_t;
 
@@ -256,6 +259,7 @@ static void _pose_of(const db_pose_estimator_t *est, db_steering_pose_t *pose) {
     pose->x_mm        = est->x;
     pose->y_mm        = est->y;
     pose->heading_deg = est->theta / DEG;
+    pose->free_spin   = est->status == DB_POSE_ESTIMATOR_LOST && est->unseeded;
 }
 
 /// Run for a number of ticks: the robot and the estimator every tick, the
@@ -301,6 +305,10 @@ static void _sim_run(sim_t *s, uint32_t ticks) {
             pose_t p = r->hist[(r->ticks - 1 - FIX_AGE_TICKS) % HISTORY];
             float  zx, zy;
             _photodiode(p.x, p.y, p.theta, &zx, &zy);
+            if (r->fix_stretch > 0) {
+                zx = r->fix_x0 + r->fix_stretch * (zx - r->fix_x0);
+                zy = r->fix_y0 + r->fix_stretch * (zy - r->fix_y0);
+            }
             zx += r->noise_mm * _noise(r);
             zy += r->noise_mm * _noise(r);
             db_pose_estimator_update(&s->est, zx, zy);
@@ -592,11 +600,11 @@ static void test_no_heading_retries_then_drives(void) {
     CHECK(_miss(&s, x, y) < 12.0f, "within 12 mm, missed by %.1f", _miss(&s, x, y));
 }
 
-static void test_lifted_mid_move_brakes_then_resumes(void) {
+static void test_lifted_mid_move_fails_on_one_spin(void) {
     // Lifted mid-batch and held still: LOST, HOLD braked, then the fixes at
-    // rest reseed and the spin turns the wheels in the air. That is a free
-    // spin: LOST again and braked, never a spin carried on in the air. Set
-    // down, it acquires and arrives.
+    // rest reseed and the spin turns the wheels in the air. That free spin
+    // fails the move at once, braked, with no retry. Set down, a new batch
+    // acquires and arrives.
     sim_t s;
     float x, y;
     _sim_init(&s, 1000, 500, 0, 1, 0.04f);
@@ -604,25 +612,31 @@ static void test_lifted_mid_move_brakes_then_resumes(void) {
     _goto(&s, x, y, 10);
     _sim_run(&s, 100);
     s.robot.airborne = 1;
-    int spin_run = 0, spin_longest = 0, free_spun = 0;
-    for (int t = 0; t < 250; t += 10) {
+    int spin_ticks = 0, spins = 0;
+    for (int t = 0; t < 1000; t += 10) {
+        db_steering_state_t before = s.steering.state;
         _sim_run(&s, 10);
-        spin_run     = (s.steering.state == DB_STEERING_NO_HEADING) ? spin_run + 10 : 0;
-        spin_longest = (spin_run > spin_longest) ? spin_run : spin_longest;
-        free_spun |= s.est.free_spins > 0;
+        if (s.steering.state == DB_STEERING_NO_HEADING) {
+            spin_ticks += 10;
+            spins += before != DB_STEERING_NO_HEADING;
+        }
     }
-    CHECK(free_spun && s.steering.retries >= 1, "a spin in the air is caught, free spins %u retries %u", s.est.free_spins, s.steering.retries);
-    CHECK(spin_longest <= 60, "and cut short, longest spin %d ticks", spin_longest);
-    CHECK(db_steering_active(&s.steering), "still an active move, state %d fail %d", s.steering.state, s.steering.fail);
+    CHECK(s.steering.state == DB_STEERING_FAILED && s.steering.fail == DB_STEERING_FAIL_NO_HEADING, "held in the air: NO_HEADING fails, state %d fail %d", s.steering.state, s.steering.fail);
+    CHECK(spins == 1 && s.est.free_spins == 1 && s.steering.retries == 0, "on its first spin, no retry: spins %d free spins %u retries %u", spins, s.est.free_spins, s.steering.retries);
+    CHECK(spin_ticks <= 40, "the spin is cut short, %d ticks", spin_ticks);
+    CHECK(s.out.brake, "and brakes");
+
     s.robot.airborne = 0;
+    _sim_run(&s, 100);
+    _goto(&s, x, y, 10);
     _sim_until_done(&s, 3000);
-    CHECK(s.steering.state == DB_STEERING_ARRIVED, "set down: arrives, state %d fail %d", s.steering.state, s.steering.fail);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "set down, a new batch arrives, state %d fail %d", s.steering.state, s.steering.fail);
     CHECK(_miss(&s, x, y) < 12.0f, "within 12 mm, missed by %.1f", _miss(&s, x, y));
 }
 
-static void test_held_in_air_fails(void) {
-    // Held in the air for good: each spin is caught as a free spin, and once
-    // the retries are spent the move fails with no heading
+static void test_batch_in_air_does_not_spin(void) {
+    // A batch sent while the pose is LOST on a free spin fails without
+    // turning the wheels
     sim_t s;
     float x, y;
     _sim_init(&s, 1000, 500, 0, 1, 0.04f);
@@ -631,8 +645,65 @@ static void test_held_in_air_fails(void) {
     _sim_run(&s, 100);
     s.robot.airborne = 1;
     _sim_until_done(&s, 3000);
-    CHECK(s.steering.state == DB_STEERING_FAILED && s.steering.fail == DB_STEERING_FAIL_NO_HEADING, "held in the air: NO_HEADING fails, state %d fail %d", s.steering.state, s.steering.fail);
-    CHECK(s.est.free_spins == DB_STEERING_NO_HEADING_RETRIES + 1U, "one free spin per attempt, %u", s.est.free_spins);
+    CHECK(s.est.free_spins == 1 && s.est.status == DB_POSE_ESTIMATOR_LOST, "lost on a free spin, status %d", s.est.status);
+    _goto(&s, x, y, 10);
+    int moved = 0;
+    for (int t = 0; t < 300; t += 10) {
+        _sim_run(&s, 10);
+        moved |= !s.out.brake && (s.out.left_mm_s != 0 || s.out.right_mm_s != 0);
+    }
+    CHECK(!moved && s.steering.state == DB_STEERING_FAILED && s.steering.fail == DB_STEERING_FAIL_NO_HEADING, "the new batch fails braked, state %d fail %d", s.steering.state, s.steering.fail);
+}
+
+static void test_spin_on_ground_acquires(void) {
+    // The same lifted-then-reseeded start on the floor: the spin moves the
+    // photodiode around the axle, so the chain acquires the heading
+    sim_t s;
+    float x, y;
+    _sim_init(&s, 1000, 500, 40, 0, 0.04f);
+    _target_from(400, 0, &x, &y);
+    _goto(&s, x, y, 10);
+    _sim_until_done(&s, 3000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && s.est.free_spins == 0, "spin on the floor: acquires and arrives, state %d fail %d free spins %u", s.steering.state, s.steering.fail, s.est.free_spins);
+}
+
+static void test_no_heading_timeout_with_motion_retries(void) {
+    // Fixes moving twice as far as the odometry says, so the chain never
+    // holds, but moving: not a free spin, so the timed-out spin rests and is
+    // retried, and acquires once the fixes agree again
+    sim_t s;
+    float x, y;
+    _sim_init(&s, 1000, 500, 30, 0, 0.04f);
+    _photodiode(s.robot.x, s.robot.y, s.robot.theta, &s.robot.fix_x0, &s.robot.fix_y0);
+    s.robot.fix_stretch = 2.0f;
+    _target_from(400, 0, &x, &y);
+    _goto(&s, x, y, 10);
+    int t = 0;
+    while (s.steering.state == DB_STEERING_NO_HEADING && t < 600) {
+        _sim_run(&s, 10);
+        t += 10;
+    }
+    CHECK(s.steering.state == DB_STEERING_HOLD && s.steering.resting && s.steering.retries == 1, "fixes off: the spin times out and rests, state %d retries %u", s.steering.state, s.steering.retries);
+    CHECK(s.est.free_spins == 0, "fixes off: no free spin, %u", s.est.free_spins);
+    s.robot.fix_stretch = 0;
+    _sim_until_done(&s, 3000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED, "fixes off: the retried spin acquires and it arrives, state %d fail %d", s.steering.state, s.steering.fail);
+}
+
+static void test_fix_stall_mid_spin_acquires(void) {
+    // Fixes stalling for 0.5 s mid-spin on the floor: the gap is no fix, not
+    // a still one, so it is no free spin and the spin still acquires
+    sim_t s;
+    float x, y;
+    _sim_init(&s, 1000, 500, 30, 0, 0.04f);
+    _target_from(400, 0, &x, &y);
+    _goto(&s, x, y, 10);
+    _sim_run(&s, 30);
+    s.robot.fixes = 0;
+    _sim_run(&s, 50);
+    s.robot.fixes = 1;
+    _sim_until_done(&s, 3000);
+    CHECK(s.steering.state == DB_STEERING_ARRIVED && s.est.free_spins == 0 && s.steering.retries == 0, "fix stall mid-spin: acquires and arrives, state %d fail %d free spins %u retries %u", s.steering.state, s.steering.fail, s.est.free_spins, s.steering.retries);
 }
 
 static void test_lost_holds_then_resumes(void) {
@@ -1355,8 +1426,11 @@ int main(void) {
     test_no_heading_spins_then_drives();
     test_no_heading_times_out();
     test_no_heading_retries_then_drives();
-    test_lifted_mid_move_brakes_then_resumes();
-    test_held_in_air_fails();
+    test_lifted_mid_move_fails_on_one_spin();
+    test_batch_in_air_does_not_spin();
+    test_spin_on_ground_acquires();
+    test_no_heading_timeout_with_motion_retries();
+    test_fix_stall_mid_spin_acquires();
     test_lost_holds_then_resumes();
     test_lost_for_good_fails();
     test_heading_lost_mid_move_recovers_straight();

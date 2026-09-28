@@ -677,6 +677,16 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
         case DB_STEERING_FAILED:
             _halt(steering, true, out);
             return;
+        default:
+            break;
+    }
+    if (pose->status == DB_STEERING_POSE_LOST && pose->free_spin) {
+        _fail(steering, DB_STEERING_FAIL_NO_HEADING);
+        _halt(steering, true, out);
+        return;
+    }
+
+    switch (steering->state) {
         case DB_STEERING_HOLD:
             if (pose->status == DB_STEERING_POSE_SEEDING) {
                 if (steering->resting && steering->state_ticks < conf->no_heading_rest_ticks) {

@@ -203,6 +203,7 @@ static void _steering_pose(const db_control_t *control, db_steering_pose_t *pose
     pose->x_mm        = control->estimator.x;
     pose->y_mm        = control->estimator.y;
     pose->heading_deg = control->estimator.theta * 180.0f / (float)M_PI;
+    pose->free_spin   = control->estimator.status == DB_POSE_ESTIMATOR_LOST && control->estimator.unseeded;
 }
 
 /// A brake from the steering holds both motors shorted until it asks otherwise

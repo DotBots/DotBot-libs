@@ -63,6 +63,9 @@ typedef struct {
     uint32_t fix_sequence;
     uint32_t fix_x;
     uint32_t fix_y;
+    bool     airborne;  ///< held off the floor: the wheels turn, the robot and its fixes stay put
+    float    air_x;     ///< photodiode fix while airborne, mm
+    float    air_y;     ///< photodiode fix while airborne, mm
 } plant_t;
 
 static float _uniform(plant_t *p) {
@@ -117,8 +120,8 @@ static void _plant_step(plant_t *p, db_control_input_t *in) {
     p->v_left  = vl;
     p->v_right = vr;
 
-    float d      = 0.5f * (dl + dr);
-    float dtheta = (dl - dr) / db_track_effective_mm(dl, dr) * 180.0f / (float)M_PI;
+    float d      = p->airborne ? 0.0f : 0.5f * (dl + dr);
+    float dtheta = p->airborne ? 0.0f : (dl - dr) / db_track_effective_mm(dl, dr) * 180.0f / (float)M_PI;
     float fx;
     float fy;
     _forward(p->heading_deg + dtheta / 2.0f, &fx, &fy);
@@ -150,8 +153,8 @@ static void _plant_step(plant_t *p, db_control_input_t *in) {
         float nx = p->noise_mm > 0 ? p->noise_mm * _gauss(p) : 0;
         float ny = p->noise_mm > 0 ? p->noise_mm * _gauss(p) : 0;
         p->fix_sequence++;
-        p->fix_x = (uint32_t)lroundf(fmaxf(0, p->px[PLANT_FIX_AGE] + nx));
-        p->fix_y = (uint32_t)lroundf(fmaxf(0, p->py[PLANT_FIX_AGE] + ny));
+        p->fix_x = (uint32_t)lroundf(fmaxf(0, (p->airborne ? p->air_x : p->px[PLANT_FIX_AGE]) + nx));
+        p->fix_y = (uint32_t)lroundf(fmaxf(0, (p->airborne ? p->air_y : p->py[PLANT_FIX_AGE]) + ny));
     }
     in->fix_sequence  = p->fix_sequence;
     in->fix_x         = p->fix_x;
@@ -566,6 +569,34 @@ static void test_many_robots_independent(void) {
     CHECK(fleet[2].control.drive_mode == DB_CONTROL_DRIVE_VELOCITY, "fleet: another drives by velocity");
 }
 
+static void test_lifted_spins_once(void) {
+    // Lifted mid-batch and held still, fixes jumping with the height: the
+    // wheels drive on until the pose times out, then one spin in the air
+    // fails the batch, braked
+    sim_t s;
+    _sim_init(&s, 1);
+    _send_batch(&s, 1);
+    _sim_run(&s, 300);
+    s.plant.airborne = true;
+    s.plant.air_x    = s.plant.px[0] + 40.0f;
+    s.plant.air_y    = s.plant.py[0] + 40.0f;
+    uint32_t bursts = 0, spin_ticks = 0;
+    bool     moving = false;
+    for (uint32_t i = 0; i < 1500; i++) {
+        _sim_run(&s, 1);
+        bool now = fabsf(s.plant.v_left) > 20.0f || fabsf(s.plant.v_right) > 20.0f;
+        bursts += now && !moving;
+        moving = now;
+        spin_ticks += s.control.steering.state == DB_STEERING_NO_HEADING;
+    }
+    db_control_report_t report;
+    db_control_report(&s.control, &report);
+    CHECK(report.status == DB_WAYPOINTS_FAILED && report.reason == DB_STEERING_FAIL_NO_HEADING, "lifted: fails NO_HEADING, status %u reason %u", report.status, report.reason);
+    CHECK(bursts == 2 && s.control.estimator.free_spins == 1, "lifted: the drive on, then one spin, bursts %u free spins %u", bursts, s.control.estimator.free_spins);
+    CHECK(spin_ticks <= 30, "lifted: the spin is braked within two fixes of starting, %u ticks in NO_HEADING", spin_ticks);
+    CHECK(report.brake_left && report.brake_right, "lifted: braked");
+}
+
 int main(void) {
     test_batch_seeded();
     test_seed();
@@ -579,6 +610,7 @@ int main(void) {
     test_advertisement();
     test_fix_due();
     test_many_robots_independent();
+    test_lifted_spins_once();
     printf("dotbot_control: %d passed, %d failed\n", _passed, _failed);
     return _failed ? 1 : 0;
 }
