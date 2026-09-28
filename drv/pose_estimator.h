@@ -235,6 +235,7 @@ typedef struct {
     uint32_t                        seeds;               ///< pose seeded or reseeded from a chain, wraps
     uint32_t                        kidnaps;             ///< returns to SEEDING on a kidnap, wraps
     uint32_t                        reanchors;           ///< position moved onto consistent rejected fixes after driving, wraps
+    uint32_t                        lost_reseeds;        ///< returns to SEEDING from LOST on a chain at rest, wraps
 } db_pose_estimator_t;
 
 //=========================== prototypes =======================================

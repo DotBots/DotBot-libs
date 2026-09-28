@@ -375,12 +375,12 @@ static void test_moved_while_driving_then_still(void) {
     r.x += 200;
     r.theta += 30 * DEG;
     _run(&est, &r, 10, 10, _conf.timeout_ticks + 10, 1, LH2_NOISE_SD_MM);
-    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.kidnaps == 0, "lost while driving, status %d kidnaps %u", est.status, est.kidnaps);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "lost while driving, status %d lost reseeds %u", est.status, est.lost_reseeds);
     _run(&est, &r, 0, 0, _conf.kidnap_settle_ticks - 10, 1, LH2_NOISE_SD_MM);
-    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.kidnaps == 0, "still lost before the wheels have settled, status %d", est.status);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "still lost before the wheels have settled, status %d", est.status);
     _run(&est, &r, 0, 0, 10 + _conf.kidnap_fixes * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
     float h = 0;
-    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.kidnaps == 1, "settled and consistent: a kidnap, status %d kidnaps %u", est.status, est.kidnaps);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1 && est.kidnaps == 0, "settled and consistent: a lost reseed, status %d lost reseeds %u kidnaps %u", est.status, est.lost_reseeds, est.kidnaps);
     CHECK(!db_pose_estimator_heading_deg(&est, &h) && est.seeds == 0, "no heading guessed at rest");
     _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "reseeded once the robot moves, status %d seeds %u", est.status, est.seeds);
@@ -410,9 +410,9 @@ static void test_lost_still_outlier_restarts_chain(void) {
         _robot_sensor(&r, LH2_NOISE_SD_MM, &zx, &zy);
         db_pose_estimator_update(&est, zx, zy);
     }
-    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.kidnaps == 0, "the outlier restarted the chain, status %d count %u", est.status, est.chain_count);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "the outlier restarted the chain, status %d count %u", est.status, est.chain_count);
     _run(&est, &r, 0, 0, TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
-    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.kidnaps == 1, "a kidnap on the next consistent fix, status %d kidnaps %u", est.status, est.kidnaps);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1, "a lost reseed on the next consistent fix, status %d lost reseeds %u", est.status, est.lost_reseeds);
 }
 
 static void test_occlusion_keeps_heading(void) {
@@ -724,7 +724,7 @@ static void test_long_carry_times_out(void) {
     _run(&est, &r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
     float h = 0;
     CHECK(!db_pose_estimator_heading_deg(&est, &h) && est.seeds == 0, "no heading at rest after the carry, status %d", est.status);
-    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.kidnaps == 1, "put down after the carry: a kidnap, status %d kidnaps %u", est.status, est.kidnaps);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1, "put down after the carry: a lost reseed, status %d lost reseeds %u", est.status, est.lost_reseeds);
     _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "motion reseeds, status %d seeds %u", est.status, est.seeds);
     CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));

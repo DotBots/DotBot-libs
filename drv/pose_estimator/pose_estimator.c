@@ -259,7 +259,7 @@ static void _lost_kidnap_check(db_pose_estimator_t *est) {
         return;
     }
     est->status = DB_POSE_ESTIMATOR_SEEDING;
-    est->kidnaps++;
+    est->lost_reseeds++;
 }
 
 /// Gated EKF update with h(x) = axle + lever(theta), on the fix moved forward
