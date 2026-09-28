@@ -78,6 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     # needs: [docker, doc, style, build-success]
     needs: [doc, style, host-tests, build-success]
+    permissions:
+      contents: write
     if: >-
       github.event_name == 'push' &&
       startsWith(github.event.ref, 'refs/tags')
@@ -88,4 +90,4 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           generateReleaseNotes: true
-          token: ${{ secrets.RELEASE_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
