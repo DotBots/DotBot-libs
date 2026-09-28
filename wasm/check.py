@@ -58,7 +58,8 @@ EXPORTS = {
     "rx_max_bytes", "advertisement_bytes", "geometry", "fleet_init", "fleet_count", "fleet_inputs",
     "fleet_outputs", "fleet_report_buffer", "fleet_battery_buffer", "fleet_advertisements_buffer",
     "fleet_rx_buffer", "fleet_advertisement_buffer", "fleet_rx", "fleet_step", "fleet_seed", "fleet_reports",
-    "fleet_advertisement", "fleet_advertisements", "fleet_set_min_tx_interval",
+    "fleet_advertisement", "fleet_advertisements", "fleet_set_min_tx_interval", "layout_offsets",
+    "layout_field_count", "fleet_fix_due", "fleet_fix_due_buffer",
 }
 ADVERTISEMENT_BYTES = 42
 
@@ -245,6 +246,25 @@ def batched(core, count=8, ticks=60):
     return runs
 
 
+def fix_due_matches_reads(core, count=4, ticks=60):
+    """With a new fix on every tick, a robot's report takes it on exactly the ticks flagged due."""
+    core.init(count)
+    inputs = np.zeros(count, INPUT)
+    inputs["elapsed_ticks"] = 1 + np.arange(count) * 3
+    core.step(inputs)
+    inputs["elapsed_ticks"] = 1
+    mask_buffer = core("fleet_fix_due_buffer")
+    for tick in range(ticks):
+        inputs["fix_sequence"], inputs["fix_x"], inputs["fix_y"] = tick + 1, 1000, 1000
+        n = core("fleet_fix_due", 1, mask_buffer)
+        due = np.frombuffer(core.read(mask_buffer, count), np.uint8).astype(bool)
+        core.step(inputs)
+        read = core.report()["fix_sequence"] == tick + 1
+        if n != due.sum() or not np.array_equal(due, read):
+            return False
+    return True
+
+
 def replay(core, ticks=1500):
     core.init(1)
     core.rx(0, waypoints_packet(POINTS, THRESHOLD_MM, 1))
@@ -283,6 +303,10 @@ def check(core, update):
     for name, dtype in (("input", INPUT), ("output", OUTPUT), ("report", REPORT), ("geometry", GEOMETRY)):
         expect(core(f"sizeof_{name}") == dtype.itemsize, f"sizeof {name} {core(f'sizeof_{name}')} == {dtype.itemsize}")
 
+    expected = [dtype.fields[name][1] for dtype in (INPUT, OUTPUT, REPORT, GEOMETRY) for name in dtype.names]
+    offsets = np.frombuffer(core.read(core("layout_offsets"), 4 * core("layout_field_count")), "<u4").tolist()
+    expect(offsets == expected, f"field offsets match the dtypes ({len(offsets)} fields)")
+
     g = core.geometry()
     expect(math.isclose(g["mm_per_count"], MM_PER_COUNT, rel_tol=1e-6) and g["lever_arm_effective_mm"] == LEVER_MM
            and (g["track_effective_mm"], g["track_effective_arc_mm"]) == (TRACK, TRACK_ARC)
@@ -292,6 +316,7 @@ def check(core, update):
     states = seeded(core)
     print(f"     seeded: states {'-'.join(states)}")
     expect("NO_HEADING" not in states[1:] and states[-1] == "ARRIVED", "seeded, drives without spinning for a heading")
+    expect(fix_due_matches_reads(core), "fleet_fix_due flags exactly the ticks that read a fix")
     batch, single = batched(core)
     expect(len(batch) > 8 and batch == single, f"batched advertisements match one-by-one ({len(batch)})")
 

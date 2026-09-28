@@ -99,10 +99,49 @@ static void test_geometry(void) {
     CHECK(g->lever_arm_effective_mm == DB_LH2_LEVER_ARM_EFFECTIVE && g->track_effective_arc_ratio == DB_TRACK_EFFECTIVE_ARC_RATIO, "geometry: effective lever arm, arc ratio");
 }
 
+static void test_fix_due(void) {
+    CHECK(fleet_init(ROBOTS) == 0, "fix due: fleet of %u", ROBOTS);
+    db_control_input_t  *inputs  = fleet_inputs();
+    db_control_output_t *outputs = fleet_outputs();
+    uint8_t             *mask    = fleet_fix_due_buffer();
+    uint32_t             due     = 0;
+    uint32_t             reads   = 0;
+    for (uint32_t i = 0; i < ROBOTS; i++) {
+        inputs[i] = (db_control_input_t){ .elapsed_ticks = 1 };
+    }
+    inputs[1].elapsed_ticks = 3;  // out of step with the others from here on
+    fleet_step(inputs, outputs);
+    inputs[1].elapsed_ticks = 1;
+    for (uint32_t tick = 0; tick < 100; tick++) {
+        uint32_t n = fleet_fix_due(1, mask);
+        uint32_t k = 0;
+        for (uint32_t i = 0; i < ROBOTS; i++) {
+            k += mask[i];
+        }
+        CHECK(n == k, "fix due: the count %u matches the mask %u", n, k);
+        CHECK(mask[0] == mask[2], "fix due: robots in step agree");
+        reads += mask[0];
+        due += n;
+        fleet_step(inputs, outputs);
+    }
+    CHECK(reads == 10, "fix due: one fix read in ten ticks, %u in 100", reads);
+    CHECK(due == 10 * ROBOTS, "fix due: every robot due once per ten ticks, %u", due);
+}
+
+static void test_layout(void) {
+    const uint32_t *offsets = layout_offsets();
+    CHECK(layout_field_count() == 6 + 7 + 28 + 11, "layout: %u fields", layout_field_count());
+    CHECK(offsets[0] == 0 && offsets[5] == 20, "layout: input's last field at %u", offsets[5]);
+    CHECK(offsets[6 + 7 + 11] == 44, "layout: report's direction at %u", offsets[6 + 7 + 11]);
+    CHECK(offsets[layout_field_count() - 1] == 40, "layout: geometry's last field at %u", offsets[layout_field_count() - 1]);
+}
+
 int main(void) {
     test_seed();
     test_advertisements();
     test_geometry();
+    test_fix_due();
+    test_layout();
     printf("dotbot_control fleet: %d passed, %d failed\n", _passed, _failed);
     return _failed ? 1 : 0;
 }

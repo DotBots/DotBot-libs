@@ -11,6 +11,7 @@
  *
  * @copyright Inria, 2026
  */
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,68 @@
 #endif
 
 _Static_assert(sizeof(fleet_geometry_t) == 44, "fleet_geometry_t is an ABI");
+
+/// Every field of the structs crossing the boundary, in declaration order,
+/// with its offset: pinned here, and exported by layout_offsets()
+#define LAYOUT_FIELDS(X)                            \
+    X(db_control_input_t, counts_left, 0)           \
+    X(db_control_input_t, counts_right, 4)          \
+    X(db_control_input_t, fix_sequence, 8)          \
+    X(db_control_input_t, fix_x, 12)                \
+    X(db_control_input_t, fix_y, 16)                \
+    X(db_control_input_t, elapsed_ticks, 20)        \
+    X(db_control_output_t, pwm_left, 0)             \
+    X(db_control_output_t, pwm_right, 1)            \
+    X(db_control_output_t, brake_left, 2)           \
+    X(db_control_output_t, brake_right, 3)          \
+    X(db_control_output_t, write, 4)                \
+    X(db_control_output_t, advertise, 5)            \
+    X(db_control_output_t, reserved, 6)             \
+    X(db_control_report_t, axle_x_mm, 0)            \
+    X(db_control_report_t, axle_y_mm, 4)            \
+    X(db_control_report_t, heading_deg, 8)          \
+    X(db_control_report_t, max_speed_mm_s, 12)      \
+    X(db_control_report_t, sensor_x, 16)            \
+    X(db_control_report_t, sensor_y, 20)            \
+    X(db_control_report_t, waypoint_x, 24)          \
+    X(db_control_report_t, waypoint_y, 28)          \
+    X(db_control_report_t, encoder_left, 32)        \
+    X(db_control_report_t, encoder_right, 36)       \
+    X(db_control_report_t, fix_sequence, 40)        \
+    X(db_control_report_t, direction, 44)           \
+    X(db_control_report_t, axle_x, 46)              \
+    X(db_control_report_t, axle_y, 48)              \
+    X(db_control_report_t, pwm_left, 50)            \
+    X(db_control_report_t, pwm_right, 51)           \
+    X(db_control_report_t, brake_left, 52)          \
+    X(db_control_report_t, brake_right, 53)         \
+    X(db_control_report_t, control_mode, 54)        \
+    X(db_control_report_t, drive_mode, 55)          \
+    X(db_control_report_t, steering_state, 56)      \
+    X(db_control_report_t, estimator_status, 57)    \
+    X(db_control_report_t, waypoint_index, 58)      \
+    X(db_control_report_t, waypoint_count, 59)      \
+    X(db_control_report_t, batch_id, 60)            \
+    X(db_control_report_t, status, 61)              \
+    X(db_control_report_t, reason, 62)              \
+    X(db_control_report_t, max_speed_10mm, 63)      \
+    X(fleet_geometry_t, wheel_diameter_mm, 0)       \
+    X(fleet_geometry_t, track_mm, 4)                \
+    X(fleet_geometry_t, encoder_cpr, 8)             \
+    X(fleet_geometry_t, gear_ratio, 12)             \
+    X(fleet_geometry_t, mm_per_count, 16)           \
+    X(fleet_geometry_t, lever_arm_mm, 20)           \
+    X(fleet_geometry_t, lever_angle_deg, 24)        \
+    X(fleet_geometry_t, lever_arm_effective_mm, 28) \
+    X(fleet_geometry_t, track_effective_mm, 32)     \
+    X(fleet_geometry_t, track_effective_arc_mm, 36) \
+    X(fleet_geometry_t, track_effective_arc_ratio, 40)
+
+#define LAYOUT_ASSERT(type, field, offset) _Static_assert(offsetof(type, field) == (offset), #type "." #field " is an ABI");
+LAYOUT_FIELDS(LAYOUT_ASSERT)
+
+#define LAYOUT_OFFSET(type, field, offset) offset,
+static const uint32_t _layout_offsets[] = { LAYOUT_FIELDS(LAYOUT_OFFSET) };
 
 static const fleet_geometry_t _geometry = {
     .wheel_diameter_mm         = DB_WHEEL_DIAMETER,
@@ -45,6 +108,7 @@ static db_control_input_t  *_inputs;
 static db_control_output_t *_outputs;
 static db_control_report_t *_reports;
 static uint8_t             *_advertise;  ///< per robot, the last step asked for an advertisement
+static uint8_t             *_fix_due;    ///< per robot, written by fleet_fix_due()
 static uint16_t            *_battery;
 static uint8_t             *_advertisements;
 static uint32_t             _count;
@@ -96,6 +160,21 @@ const fleet_geometry_t *geometry(void) {
     return &_geometry;
 }
 
+/**
+ * Offsets of every field of db_control_input_t, db_control_output_t,
+ * db_control_report_t and fleet_geometry_t, in that order and each in
+ * declaration order: layout_field_count() uint32_t
+ */
+EXPORT(layout_offsets)
+const uint32_t *layout_offsets(void) {
+    return _layout_offsets;
+}
+
+EXPORT(layout_field_count)
+uint32_t layout_field_count(void) {
+    return sizeof(_layout_offsets) / sizeof(_layout_offsets[0]);
+}
+
 /// Replaces the fleet with count robots, idle and without a pose; 0 on success
 EXPORT(fleet_init)
 int32_t fleet_init(uint32_t count) {
@@ -104,6 +183,7 @@ int32_t fleet_init(uint32_t count) {
     free(_outputs);
     free(_reports);
     free(_advertise);
+    free(_fix_due);
     free(_battery);
     free(_advertisements);
     _count          = 0;
@@ -112,9 +192,10 @@ int32_t fleet_init(uint32_t count) {
     _outputs        = calloc(count, sizeof(*_outputs));
     _reports        = calloc(count, sizeof(*_reports));
     _advertise      = calloc(count, sizeof(*_advertise));
+    _fix_due        = calloc(count, sizeof(*_fix_due));
     _battery        = calloc(count, sizeof(*_battery));
     _advertisements = calloc(count, sizeof(uint32_t) + DB_CONTROL_ADVERTISEMENT_BYTES);
-    if (count > 0 && !(_robots && _inputs && _outputs && _reports && _advertise && _battery && _advertisements)) {
+    if (count > 0 && !(_robots && _inputs && _outputs && _reports && _advertise && _fix_due && _battery && _advertisements)) {
         return -1;
     }
     for (uint32_t i = 0; i < count; i++) {
@@ -156,6 +237,12 @@ uint8_t *fleet_advertisements_buffer(void) {
     return _advertisements;
 }
 
+/// One uint8_t per robot, for fleet_fix_due()
+EXPORT(fleet_fix_due_buffer)
+uint8_t *fleet_fix_due_buffer(void) {
+    return _fix_due;
+}
+
 EXPORT(fleet_rx_buffer)
 uint8_t *fleet_rx_buffer(void) {
     return _rx_buffer;
@@ -171,6 +258,18 @@ void fleet_rx(uint32_t index, const uint8_t *packet, uint32_t length) {
     if (index < _count) {
         db_control_rx(&_robots[index], packet, length);
     }
+}
+
+/// Per robot, whether the next fleet_step() reads its fix, given elapsed_ticks
+/// for all of them: see db_control_fix_due(). Returns how many are due.
+EXPORT(fleet_fix_due)
+uint32_t fleet_fix_due(uint32_t elapsed_ticks, uint8_t *mask) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < _count; i++) {
+        mask[i] = db_control_fix_due(&_robots[i], elapsed_ticks);
+        n += mask[i];
+    }
+    return n;
 }
 
 /// One tick of every robot: inputs and outputs are arrays of fleet_count()
