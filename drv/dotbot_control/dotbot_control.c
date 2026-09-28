@@ -99,6 +99,8 @@ const db_control_conf_t db_control_default_conf = {
         .q_heading_slip_deg2_per_mm_s = DB_POSE_ESTIMATOR_Q_HEADING_SLIP_DEG2_PER_MM_S,
         .slip_deadband_mm_s           = DB_POSE_ESTIMATOR_SLIP_DEADBAND_MM_S,
         .speed_tau_ms                 = DB_POSE_ESTIMATOR_SPEED_TAU_MS,
+        .rest_mm                      = DB_POSE_ESTIMATOR_REST_MM,
+        .free_spin_mm                 = DB_POSE_ESTIMATOR_FREE_SPIN_MM,
     },
     .steering = {
         .lever_mm              = DB_LH2_LEVER_ARM_EFFECTIVE,
