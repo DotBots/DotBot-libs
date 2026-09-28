@@ -247,7 +247,8 @@ def batched(core, count=8, ticks=60):
 
 
 def fix_due_matches_reads(core, count=4, ticks=60):
-    """With a new fix on every tick, a robot's report takes it on exactly the ticks flagged due."""
+    """With a new fix on every tick, a robot's report takes it on exactly the ticks flagged due,
+    by fleet_fix_due() and by the mask the previous fleet_step() left."""
     core.init(count)
     inputs = np.zeros(count, INPUT)
     inputs["elapsed_ticks"] = 1 + np.arange(count) * 3
@@ -256,8 +257,11 @@ def fix_due_matches_reads(core, count=4, ticks=60):
     mask_buffer = core("fleet_fix_due_buffer")
     for tick in range(ticks):
         inputs["fix_sequence"], inputs["fix_x"], inputs["fix_y"] = tick + 1, 1000, 1000
+        left = np.frombuffer(core.read(mask_buffer, count), np.uint8).copy()
         n = core("fleet_fix_due", 1, mask_buffer)
         due = np.frombuffer(core.read(mask_buffer, count), np.uint8).astype(bool)
+        if not np.array_equal(left.astype(bool), due):
+            return False
         core.step(inputs)
         read = core.report()["fix_sequence"] == tick + 1
         if n != due.sum() or not np.array_equal(due, read):
@@ -316,7 +320,7 @@ def check(core, update):
     states = seeded(core)
     print(f"     seeded: states {'-'.join(states)}")
     expect("NO_HEADING" not in states[1:] and states[-1] == "ARRIVED", "seeded, drives without spinning for a heading")
-    expect(fix_due_matches_reads(core), "fleet_fix_due flags exactly the ticks that read a fix")
+    expect(fix_due_matches_reads(core), "fleet_fix_due and fleet_step flag exactly the ticks that read a fix")
     batch, single = batched(core)
     expect(len(batch) > 8 and batch == single, f"batched advertisements match one-by-one ({len(batch)})")
 

@@ -113,7 +113,10 @@ static void test_fix_due(void) {
     fleet_step(inputs, outputs);
     inputs[1].elapsed_ticks = 1;
     for (uint32_t tick = 0; tick < 100; tick++) {
+        uint8_t left[ROBOTS];
+        memcpy(left, mask, sizeof(left));
         uint32_t n = fleet_fix_due(1, mask);
+        CHECK(memcmp(left, mask, sizeof(left)) == 0, "fix due: the step left the same mask, tick %u", tick);
         uint32_t k = 0;
         for (uint32_t i = 0; i < ROBOTS; i++) {
             k += mask[i];

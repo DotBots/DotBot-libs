@@ -237,7 +237,8 @@ uint8_t *fleet_advertisements_buffer(void) {
     return _advertisements;
 }
 
-/// One uint8_t per robot, for fleet_fix_due()
+/// One uint8_t per robot: after fleet_step(), whether each robot's next step
+/// of one tick reads its fix; fleet_fix_due() writes it for other steps
 EXPORT(fleet_fix_due_buffer)
 uint8_t *fleet_fix_due_buffer(void) {
     return _fix_due;
@@ -272,12 +273,14 @@ uint32_t fleet_fix_due(uint32_t elapsed_ticks, uint8_t *mask) {
     return n;
 }
 
-/// One tick of every robot: inputs and outputs are arrays of fleet_count()
+/// One tick of every robot: inputs and outputs are arrays of fleet_count().
+/// Leaves in fleet_fix_due_buffer() which robots' next one-tick step reads a fix.
 EXPORT(fleet_step)
 void fleet_step(const db_control_input_t *inputs, db_control_output_t *outputs) {
     for (uint32_t i = 0; i < _count; i++) {
         db_control_tick(&_robots[i], &inputs[i], &outputs[i]);
         _advertise[i] = outputs[i].advertise;
+        _fix_due[i]   = db_control_fix_due(&_robots[i], 1);
     }
 }
 
