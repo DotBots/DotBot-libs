@@ -112,8 +112,14 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+      - name: Download the wasm build
+        uses: actions/download-artifact@v4
+        with:
+          name: dotbot_control.wasm
+          path: build/wasm
       - name: Release
         uses: ncipollo/release-action@v1
         with:
           generateReleaseNotes: true
+          artifacts: build/wasm/dotbot_control.wasm
           token: ${{ secrets.GITHUB_TOKEN }}
