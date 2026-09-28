@@ -69,6 +69,7 @@ static void _forward(float heading_deg, float *fx, float *fy) {
 static void _enter(db_steering_t *steering, db_steering_state_t state) {
     if (state != steering->state) {
         steering->spinning = false;
+        steering->resting  = false;
     }
     steering->state       = state;
     steering->state_ticks = 0;
@@ -126,6 +127,19 @@ static void _halt(db_steering_t *steering, bool brake, db_steering_output_t *out
     steering->v_mm_s      = 0;
     steering->omega_deg_s = 0;
     steering->has_error   = false;
+}
+
+/// A NO_HEADING spin ended without a heading: rest in HOLD before the next,
+/// or fail once no retry is left
+static void _no_heading_retry(db_steering_t *steering, bool resting, db_steering_output_t *out) {
+    if (steering->retries >= steering->conf->no_heading_retries) {
+        _fail(steering, DB_STEERING_FAIL_NO_HEADING);
+    } else {
+        steering->retries++;
+        _enter(steering, DB_STEERING_HOLD);
+        steering->resting = resting;
+    }
+    _halt(steering, true, out);
 }
 
 /// Whether the recovery straight from the last tracked pose stays inside the bounds
@@ -518,6 +532,7 @@ void db_steering_set_path(db_steering_t *steering, const db_steering_path_t *pat
     steering->index      = 0;
     steering->has_start  = false;
     steering->nudges     = 0;
+    steering->retries    = 0;
     steering->fail       = DB_STEERING_FAIL_NONE;
     steering->completion = DB_STEERING_DONE_IN_PROGRESS;
     steering->has_error  = false;
@@ -664,11 +679,16 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
             return;
         case DB_STEERING_HOLD:
             if (pose->status == DB_STEERING_POSE_SEEDING) {
+                if (steering->resting && steering->state_ticks < conf->no_heading_rest_ticks) {
+                    _halt(steering, true, out);
+                    return;
+                }
                 // Standing still: re-acquire by the spin
                 _enter(steering, DB_STEERING_NO_HEADING);
                 _halt(steering, false, out);
                 return;
             } else if (pose->status == DB_STEERING_POSE_TRACKING) {
+                steering->retries = 0;
                 _enter(steering, DB_STEERING_ALIGN);
                 _reset_progress(steering);
                 _move(steering, pose, elapsed_ticks, out);
@@ -704,18 +724,18 @@ void db_steering_step(db_steering_t *steering, const db_steering_pose_t *pose, u
             if (pose->status == DB_STEERING_POSE_TRACKING && (!steering->spinning || steering->state_ticks >= conf->no_heading_turn_ticks)) {
                 steering->spinning  = false;
                 steering->has_error = false;
+                steering->retries   = 0;
                 _enter(steering, DB_STEERING_ALIGN);
                 _move(steering, pose, elapsed_ticks, out);
                 return;
             }
             if (pose->status == DB_STEERING_POSE_LOST) {
-                _enter(steering, DB_STEERING_HOLD);
-                _halt(steering, true, out);
+                // LOST mid-spin: HOLD until the pose is SEEDING again
+                _no_heading_retry(steering, false, out);
                 return;
             }
             if (steering->state_ticks > conf->no_heading_ticks) {
-                _fail(steering, DB_STEERING_FAIL_NO_HEADING);
-                _halt(steering, true, out);
+                _no_heading_retry(steering, true, out);
                 return;
             }
             steering->spinning    = true;

@@ -138,6 +138,8 @@ const db_control_conf_t db_control_default_conf = {
         .recover_mm_s          = DB_STEERING_RECOVER_MM_S,
         .bounds_mm             = { 0, 0, 10000.0f, 10000.0f },  // the LH2 calibration's validity rectangle
         .bounds_margin_mm      = DB_STEERING_BOUNDS_MARGIN_MM,
+        .no_heading_retries    = DB_STEERING_NO_HEADING_RETRIES,
+        .no_heading_rest_ticks = DB_STEERING_NO_HEADING_REST_TICKS,
     },
     .deadman_ticks = 52U,  // ~520 ms
 };
