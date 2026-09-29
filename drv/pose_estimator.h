@@ -39,7 +39,17 @@
  * heading stays unknown until motion re-acquires it. The same fixes arriving
  * sooner after motion, within reanchor_mm of the estimate, are slip the
  * odometry missed: the position is moved onto them, the heading is kept and
- * its variance raised by reanchor_heading_var_deg2.
+ * its variance raised by reanchor_heading_var_deg2. While LOST, at least
+ * kidnap_fixes fixes that stay within rest_mm of their mean for
+ * kidnap_settle_ticks, with the wheels standing as long, are a robot put down
+ * by hand: SEEDING, with the chain started on their mean. Fixes that creep, as
+ * on a robot carried slowly with its wheels braked, keep it LOST.
+ *
+ * Free spin: while SEEDING, fixes the chain rejects because odometry saw the
+ * photodiode move while they stayed within free_spin_mm are wheels turning in
+ * the air. Once those rejections add up to acquire_mm of odometry, the
+ * estimator goes LOST with no pose, so the steering brakes; fixes then only
+ * chain, and it seeds again as above once the robot is put down.
  *
  * No hardware calls, so the module also builds on the host for its tests.
  *
@@ -122,6 +132,15 @@
 /// it a kidnap, ticks: 0.5 s. A robot that drove a moment ago re-anchors instead.
 #define DB_POSE_ESTIMATOR_KIDNAP_SETTLE_TICKS (50U)
 
+/// Largest spread, in mm, of fixes from their mean for a LOST robot to count
+/// as put down: above the LH2 jitter at rest, below what a slow carry moves
+/// over kidnap_settle_ticks
+#define DB_POSE_ESTIMATOR_REST_MM (5.0f)
+
+/// Fix motion, in mm, below which a chain the odometry broke is wheels
+/// turning in the air
+#define DB_POSE_ESTIMATOR_FREE_SPIN_MM (10.0f)
+
 /// Both filtered wheel speeds below this count as standing, mm/s: well above
 /// what a stray count reads as, well below any commanded speed
 #define DB_POSE_ESTIMATOR_STILL_MM_S (20.0f)
@@ -191,6 +210,8 @@ typedef struct {
     float    q_heading_slip_deg2_per_mm_s;  ///< heading variance per mm/s of wheel speed change past the deadband
     float    slip_deadband_mm_s;            ///< filtered speed change per tick below which nothing is added, mm/s
     float    speed_tau_ms;                  ///< wheel speed filter time constant, ms
+    float    rest_mm;                       ///< spread from their mean of the fixes of a LOST robot put down, mm
+    float    free_spin_mm;                  ///< fix motion below which a broken chain is wheels in the air, mm; 0 disables
 } db_pose_estimator_conf_t;
 
 /// Odometry of the most recent predicts, in every state, newest at head - 1
@@ -233,6 +254,14 @@ typedef struct {
     uint32_t                        seeds;               ///< pose seeded or reseeded from a chain, wraps
     uint32_t                        kidnaps;             ///< returns to SEEDING on a kidnap, wraps
     uint32_t                        reanchors;           ///< position moved onto consistent rejected fixes after driving, wraps
+    uint32_t                        lost_reseeds;        ///< returns to SEEDING from LOST on fixes at rest, wraps
+    float                           free_spin_odo_mm;    ///< odometry of the photodiode over consecutive free-spin rejections, mm
+    float                           rest_x;              ///< mean of the fixes at rest while LOST, mm
+    float                           rest_y;              ///< mean of the fixes at rest while LOST, mm
+    uint32_t                        rest_count;          ///< fixes in that mean, 0 when none
+    uint32_t                        rest_ticks;          ///< ticks since the first of them, saturating
+    bool                            unseeded;            ///< LOST with no pose, after a free spin: fixes only chain
+    uint32_t                        free_spins;          ///< returns to LOST from SEEDING on a free spin, wraps
 } db_pose_estimator_t;
 
 //=========================== prototypes =======================================

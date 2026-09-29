@@ -103,6 +103,15 @@ static void _chain_start(db_pose_estimator_t *est, float x_mm, float y_mm) {
     est->chain_count     = 1;
 }
 
+/// LOST, and nothing of the chain or the fixes at rest kept
+static void _lose(db_pose_estimator_t *est) {
+    est->status           = DB_POSE_ESTIMATOR_LOST;
+    est->chain_count      = 0;
+    est->kidnap_count     = 0;
+    est->rest_count       = 0;
+    est->free_spin_odo_mm = 0;
+}
+
 /// Adds a fix to the seed chain, and sets the pose once the chain can solve for
 /// heading. The fix and the chain's first fix are the photodiode at two capture
 /// times; odometry gives the axle travel b and rotation dtheta between them in
@@ -127,9 +136,24 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     float body_mm  = sqrtf(vx * vx + vy * vy);
     float world_mm = sqrtf(zx * zx + zy * zy);
 
+    bool static_fixes = world_mm < conf->free_spin_mm;
     if (fabsf(world_mm - body_mm) > conf->seed_tolerance_mm) {
+        if (est->status == DB_POSE_ESTIMATOR_SEEDING && static_fixes) {
+            est->free_spin_odo_mm += body_mm;
+            if (est->free_spin_odo_mm >= conf->acquire_mm) {
+                _lose(est);
+                est->unseeded = true;
+                est->free_spins++;
+                return DB_POSE_ESTIMATOR_REJECTED;
+            }
+        } else {
+            est->free_spin_odo_mm = 0;
+        }
         _chain_start(est, x_mm, y_mm);
         return DB_POSE_ESTIMATOR_REJECTED;
+    }
+    if (!static_fixes) {
+        est->free_spin_odo_mm = 0;
     }
     if (est->chain_count < UINT32_MAX) {
         est->chain_count++;
@@ -166,6 +190,7 @@ static db_pose_estimator_result_t _chain_add(db_pose_estimator_t *est, float x_m
     est->chain_count        = 0;
     est->kidnap_count       = 0;
     est->ticks_since_accept = 0;
+    est->unseeded           = false;
     for (uint32_t i = _fix_age(conf); i >= 1; i--) {
         uint32_t slot = _travel_slot(est, i);
         _propagate(est, est->travel.d[slot], est->travel.dtheta[slot], est->travel.q_theta[slot], 0);
@@ -246,9 +271,50 @@ static void _kidnap_check(db_pose_estimator_t *est, float x_mm, float y_mm) {
     }
     est->status = DB_POSE_ESTIMATOR_SEEDING;
     _chain_start(est, est->kidnap_x, est->kidnap_y);
-    est->chain_count  = est->kidnap_count;
-    est->kidnap_count = 0;
+    est->chain_count      = est->kidnap_count;
+    est->kidnap_count     = 0;
+    est->free_spin_odo_mm = 0;
     est->kidnaps++;
+}
+
+/// While LOST, fixes that stay within rest_mm of their mean for the settle
+/// time, with the wheels standing as long, are a robot put down by hand:
+/// SEEDING, with the chain started on their mean
+static void _lost_rest_check(db_pose_estimator_t *est, float x_mm, float y_mm) {
+    const db_pose_estimator_conf_t *conf = est->conf;
+    if (conf->kidnap_fixes == 0) {
+        return;
+    }
+    if (est->rest_count == 0 || hypotf(x_mm - est->rest_x, y_mm - est->rest_y) > conf->rest_mm) {
+        est->rest_x     = x_mm;
+        est->rest_y     = y_mm;
+        est->rest_count = 1;
+        est->rest_ticks = 0;
+    } else {
+        est->rest_count++;
+        est->rest_x += (x_mm - est->rest_x) / (float)est->rest_count;
+        est->rest_y += (y_mm - est->rest_y) / (float)est->rest_count;
+    }
+    if (est->rest_count < conf->kidnap_fixes || est->rest_ticks < conf->kidnap_settle_ticks || est->still_ticks == 0 || est->still_ticks < conf->kidnap_settle_ticks) {
+        return;
+    }
+    est->status = DB_POSE_ESTIMATOR_SEEDING;
+    _chain_start(est, est->rest_x, est->rest_y);
+    est->chain_count      = est->rest_count;
+    est->rest_count       = 0;
+    est->free_spin_odo_mm = 0;
+    est->lost_reseeds++;
+}
+
+/// A fix while LOST that the gate did not take: the chain may reseed the pose,
+/// else the fixes at rest may return to SEEDING
+static db_pose_estimator_result_t _lost_update(db_pose_estimator_t *est, float x_mm, float y_mm) {
+    db_pose_estimator_result_t result = _chain_add(est, x_mm, y_mm);
+    if (result == DB_POSE_ESTIMATOR_SEEDED) {
+        return result;
+    }
+    _lost_rest_check(est, x_mm, y_mm);
+    return DB_POSE_ESTIMATOR_REJECTED;
 }
 
 /// Gated EKF update with h(x) = axle + lever(theta), on the fix moved forward
@@ -353,6 +419,7 @@ void db_pose_estimator_seed(db_pose_estimator_t *est, float x_mm, float y_mm, fl
     est->chain_count        = 0;
     est->kidnap_count       = 0;
     est->ticks_since_accept = 0;
+    est->unseeded           = false;
 }
 
 void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, int32_t counts_right, uint32_t elapsed_ticks) {
@@ -365,9 +432,10 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
         est->ticks_since_accept += elapsed_ticks;
     }
     if (est->status == DB_POSE_ESTIMATOR_TRACKING && est->ticks_since_accept > conf->timeout_ticks) {
-        est->status       = DB_POSE_ESTIMATOR_LOST;
-        est->chain_count  = 0;
-        est->kidnap_count = 0;
+        _lose(est);
+    }
+    if (est->rest_count > 0) {
+        est->rest_ticks = (UINT32_MAX - est->rest_ticks < elapsed_ticks) ? UINT32_MAX : est->rest_ticks + elapsed_ticks;
     }
 
     float d_left  = (float)counts_left * DB_MM_PER_COUNT;
@@ -424,6 +492,8 @@ db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, fl
     db_pose_estimator_result_t result;
     if (est->status == DB_POSE_ESTIMATOR_SEEDING) {
         result = _chain_add(est, x_mm, y_mm);
+    } else if (est->unseeded) {
+        result = _lost_update(est, x_mm, y_mm);
     } else {
         result = _gated_update(est, x_mm, y_mm);
         if (result == DB_POSE_ESTIMATOR_ACCEPTED) {
@@ -434,10 +504,7 @@ db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, fl
         } else if (est->status == DB_POSE_ESTIMATOR_TRACKING) {
             _kidnap_check(est, x_mm, y_mm);
         } else if (est->status == DB_POSE_ESTIMATOR_LOST) {
-            result = _chain_add(est, x_mm, y_mm);
-            if (result == DB_POSE_ESTIMATOR_CHAINED) {
-                result = DB_POSE_ESTIMATOR_REJECTED;
-            }
+            result = _lost_update(est, x_mm, y_mm);
         }
     }
     if (result == DB_POSE_ESTIMATOR_ACCEPTED) {

@@ -97,7 +97,7 @@ ARTIFACT_HEX = $(ARTIFACT_ELF:.elf=.hex)
 ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 
-.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test
+.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test wasm
 
 all: $(PROJECTS)
 
@@ -128,10 +128,12 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
+	$(TEST_BUILD_DIR)/test_dotbot_control
+	$(TEST_BUILD_DIR)/test_dotbot_control_fleet
 
 $(TEST_BUILD_DIR)/test_wheel_control: tests/test_wheel_control.c drv/wheel_control/wheel_control.c drv/wheel_control.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
@@ -144,6 +146,34 @@ $(TEST_BUILD_DIR)/test_pose_estimator: tests/test_pose_estimator.c drv/pose_esti
 $(TEST_BUILD_DIR)/test_steering: tests/test_steering.c drv/steering/steering.c drv/steering.h drv/protocol.h drv/wheel_control/wheel_control.c drv/wheel_control.h drv/pose_estimator/pose_estimator.c drv/pose_estimator.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_steering.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c -lm
+
+CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c
+CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h
+
+$(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c $(CONTROL_SRCS) $(CONTROL_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_dotbot_control.c $(CONTROL_SRCS) -lm
+
+$(TEST_BUILD_DIR)/test_dotbot_control_fleet: tests/test_dotbot_control_fleet.c wasm/dotbot_control_wasm.c wasm/dotbot_control_wasm.h $(CONTROL_SRCS) $(CONTROL_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Iwasm -o $@ tests/test_dotbot_control_fleet.c wasm/dotbot_control_wasm.c $(CONTROL_SRCS) -lm
+
+# The control core as a WebAssembly reactor with no imports, for simulators;
+# check it with wasm/check.py (see its docstring)
+WASI_SDK ?= build/wasi-sdk
+WASM_BUILD_DIR ?= build/wasm
+WASM_CFLAGS ?= --target=wasm32-wasip1 -mexec-model=reactor -std=gnu11 -Wall -Wextra -Wpedantic -Werror -O2 -ffp-contract=off -DBOARD_DOTBOT_V3 -Idrv
+
+wasm: $(WASM_BUILD_DIR)/dotbot_control.wasm
+
+$(WASM_BUILD_DIR)/dotbot_control.wasm: wasm/dotbot_control_wasm.c wasm/dotbot_control_wasm.h $(CONTROL_SRCS) $(CONTROL_HDRS)
+	@if [ ! -x "$(WASI_SDK)/bin/clang" ]; then \
+		echo "wasm: no wasi-sdk clang at $(WASI_SDK)/bin/clang; run wasm/fetch-wasi-sdk.sh" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p $(WASM_BUILD_DIR)
+	"$(WASI_SDK)/bin/clang" $(WASM_CFLAGS) -o $@ wasm/dotbot_control_wasm.c $(CONTROL_SRCS) -Wl,--strip-all
+	@ls -l $@
 
 artifacts: $(ARTIFACT_PROJECTS)
 	@mkdir -p artifacts

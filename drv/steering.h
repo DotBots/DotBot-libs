@@ -44,7 +44,11 @@
  * lost mid-move and not re-acquired, or on HOLD running out. A heading lost
  * while moving (the pose SEEDING) is re-acquired by RECOVER, a straight of up
  * to recover_mm along the last heading, when recover is DRIVE and the straight
- * stays inside the bounds; otherwise by NO_HEADING's spin. ARRIVED, HOLD,
+ * stays inside the bounds; otherwise by NO_HEADING's spin. A spin that ends
+ * without a heading, on its timeout or on the pose going LOST, is retried up
+ * to no_heading_retries times from HOLD: after no_heading_rest_ticks braked,
+ * or once the pose is SEEDING again. A pose LOST on a free spin, the wheels
+ * turning in the air, fails the batch at once, with no retry. ARRIVED, HOLD,
  * SETTLE and FAILED ask for the motors to be braked.
  *
  * Headings are in degrees, 0 facing +y and positive clockwise, so body-forward
@@ -161,6 +165,12 @@
 /// Longest NO_HEADING spin before giving up, ticks: two turns at the spin limit
 #define DB_STEERING_NO_HEADING_TICKS (300U)
 
+/// NO_HEADING spins retried after one ends without a heading
+#define DB_STEERING_NO_HEADING_RETRIES (3U)
+
+/// Braked rest before retrying a NO_HEADING spin that timed out, ticks
+#define DB_STEERING_NO_HEADING_REST_TICKS (100U)
+
 /// Longest turn in place in ALIGN or FINAL_TURN, ticks
 #define DB_STEERING_TURN_TICKS (300U)
 
@@ -220,11 +230,17 @@ typedef enum {
  *               point, same state; FINAL_TURN within tolerance, more points: next point, ALIGN
  * pose SEEDING  in ALIGN, DRIVE, FINAL_TURN, SETTLE, NUDGE: RECOVER when moving, recover is
  *               DRIVE and the straight stays inside bounds_mm; else NO_HEADING
- * pose LOST     in NO_HEADING, ALIGN, DRIVE, FINAL_TURN, SETTLE, NUDGE, RECOVER: HOLD
- * HOLD          tracks: ALIGN; SEEDING: NO_HEADING
+ * pose LOST     in NO_HEADING (5), ALIGN, DRIVE, FINAL_TURN, SETTLE, NUDGE, RECOVER: HOLD;
+ *               on a free spin, in any of these or HOLD: FAILED
+ * HOLD          tracks: ALIGN; SEEDING: NO_HEADING, after no_heading_rest_ticks when resting
  * RECOVER       tracks: ALIGN
+ * NO_HEADING    after no_heading_ticks (5): HOLD, resting
  *
- * to FAILED     NO_HEADING after no_heading_ticks                         fail NO_HEADING
+ * (5) a retry, at most no_heading_retries per batch counted since the heading
+ *     was last acquired; past them, fail NO_HEADING
+ *
+ * to FAILED     NO_HEADING after no_heading_ticks, no retry left          fail NO_HEADING
+ *               pose LOST on a free spin                                  fail NO_HEADING
  *               ALIGN, FINAL_TURN after turn_ticks                        fail TURN
  *               ALIGN, DRIVE not progress_mm closer in progress_ticks     fail PROGRESS
  *               RECOVER after recover_mm, still SEEDING                   fail HEADING_LOST
@@ -287,6 +303,7 @@ typedef struct {
     float                     x_mm;         ///< axle midpoint
     float                     y_mm;         ///< axle midpoint
     float                     heading_deg;  ///< 0 along +y, clockwise positive
+    bool                      free_spin;    ///< LOST on wheels turning in the air
 } db_steering_pose_t;
 
 /// One target
@@ -352,6 +369,8 @@ typedef struct {
     float                 recover_mm_s;           ///< speed of that straight, mm/s
     float                 bounds_mm[4];           ///< x0, y0, x1, y1 the recovery straight must stay inside; all 0 for none
     float                 bounds_margin_mm;       ///< margin inside the bounds, mm
+    uint32_t              no_heading_retries;     ///< NO_HEADING spins retried; 0 fails on the first
+    uint32_t              no_heading_rest_ticks;  ///< braked rest before retrying a timed-out spin
 } db_steering_conf_t;
 
 /// Steering state
@@ -392,6 +411,8 @@ typedef struct {
     bool                      has_last;           ///< the three above are valid
     float                     recover_sign;       ///< +1 forward, -1 backward, during RECOVER
     uint32_t                  progress_ticks;     ///< ticks since best_mm last improved
+    uint32_t                  retries;            ///< NO_HEADING spins retried since the heading was last acquired
+    bool                      resting;            ///< HOLD is the rest before a retried spin
 } db_steering_t;
 
 /// Wheel speeds to apply

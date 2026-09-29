@@ -58,6 +58,8 @@ static const db_pose_estimator_conf_t _conf = {
     .q_heading_slip_deg2_per_mm_s = DB_POSE_ESTIMATOR_Q_HEADING_SLIP_DEG2_PER_MM_S,
     .slip_deadband_mm_s           = DB_POSE_ESTIMATOR_SLIP_DEADBAND_MM_S,
     .speed_tau_ms                 = DB_POSE_ESTIMATOR_SPEED_TAU_MS,
+    .rest_mm                      = DB_POSE_ESTIMATOR_REST_MM,
+    .free_spin_mm                 = DB_POSE_ESTIMATOR_FREE_SPIN_MM,
 };
 
 //=========================== simulated robot ==================================
@@ -362,6 +364,57 @@ static void test_rejected_while_driving_times_out(void) {
     _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1 && est.kidnaps == 0, "reseeded by the chain, status %d, seeds %u", est.status, est.seeds);
     CHECK(hypotf(est.x - r.x, est.y - r.y) < 5.0f, "reseeded axle within 5 mm, %.2f off", hypotf(est.x - r.x, est.y - r.y));
+}
+
+static void test_moved_while_driving_then_still(void) {
+    // Moved by hand while driving: rejected until LOST, then the wheels stop.
+    // Once they have stood for the settle time, consistent fixes are a kidnap.
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 15, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+    _run(&est, &r, 10, 10, 50, 1, LH2_NOISE_SD_MM);
+    r.x += 200;
+    r.theta += 30 * DEG;
+    _run(&est, &r, 10, 10, _conf.timeout_ticks + 10, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "lost while driving, status %d lost reseeds %u", est.status, est.lost_reseeds);
+    _run(&est, &r, 0, 0, _conf.kidnap_settle_ticks - 10, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "still lost before the wheels have settled, status %d", est.status);
+    _run(&est, &r, 0, 0, 10 + _conf.kidnap_fixes * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    float h = 0;
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1 && est.kidnaps == 0, "settled and consistent: a lost reseed, status %d lost reseeds %u kidnaps %u", est.status, est.lost_reseeds, est.kidnaps);
+    CHECK(!db_pose_estimator_heading_deg(&est, &h) && est.seeds == 0, "no heading guessed at rest");
+    _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "reseeded once the robot moves, status %d seeds %u", est.status, est.seeds);
+    CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));
+    CHECK(hypotf(est.x - r.x, est.y - r.y) < 5.0f, "axle within 5 mm, %.2f off", hypotf(est.x - r.x, est.y - r.y));
+}
+
+static void test_lost_still_outlier_restarts_chain(void) {
+    // LOST at rest with no fixes, then moved: an outlier among the fixes at the
+    // new spot restarts the fixes at rest, so the reseed waits the settle time after it
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 16, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+    _run(&est, &r, 0, 0, _conf.timeout_ticks + 10, 0, 0);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST, "lost without fixes, status %d", est.status);
+    r.x -= 300;
+    float zx, zy;
+    for (uint32_t i = 0; i + 1 < _conf.kidnap_fixes; i++) {
+        _run(&est, &r, 0, 0, TICKS_PER_FIX, 0, 0);
+        _robot_sensor(&r, LH2_NOISE_SD_MM, &zx, &zy);
+        db_pose_estimator_update(&est, zx, zy);
+    }
+    CHECK(db_pose_estimator_update(&est, zx + 150, zy) == DB_POSE_ESTIMATOR_REJECTED, "an outlier is rejected");
+    for (uint32_t i = 0; i + 1 < _conf.kidnap_fixes; i++) {
+        _run(&est, &r, 0, 0, TICKS_PER_FIX, 0, 0);
+        _robot_sensor(&r, LH2_NOISE_SD_MM, &zx, &zy);
+        db_pose_estimator_update(&est, zx, zy);
+    }
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "the outlier restarted the fixes at rest, status %d count %u", est.status, est.rest_count);
+    _run(&est, &r, 0, 0, _conf.kidnap_settle_ticks, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1, "a lost reseed once the fixes have rested for the settle time, status %d lost reseeds %u", est.status, est.lost_reseeds);
 }
 
 static void test_occlusion_keeps_heading(void) {
@@ -673,8 +726,73 @@ static void test_long_carry_times_out(void) {
     _run(&est, &r, 0, 0, 100, 1, LH2_NOISE_SD_MM);
     float h = 0;
     CHECK(!db_pose_estimator_heading_deg(&est, &h) && est.seeds == 0, "no heading at rest after the carry, status %d", est.status);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1, "put down after the carry: a lost reseed, status %d lost reseeds %u", est.status, est.lost_reseeds);
     _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
     CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "motion reseeds, status %d seeds %u", est.status, est.seeds);
+    CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));
+}
+
+static void test_slow_carry_braked_no_reseed(void) {
+    // Lifted while driving and carried slowly with the wheels braked: the
+    // fixes creep, 6.5 mm apart, which the chain's tolerance lets through but
+    // the fixes at rest do not. Only once set down and still does it reseed.
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 17, .fix_age = DB_POSE_ESTIMATOR_FIX_AGE_TICKS };
+    db_pose_estimator_init(&est, &_conf);
+    db_pose_estimator_seed(&est, r.x, r.y, 0, 2);
+    _run(&est, &r, 0, 0, _conf.timeout_ticks + 10, 0, 0);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST, "lifted: lost without fixes, status %d", est.status);
+    r.x += 300;
+    for (int i = 0; i < 30; i++) {
+        r.x += 6.5f;
+        _run(&est, &r, 0, 0, TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    }
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.lost_reseeds == 0, "carried at 65 mm/s with the wheels braked: still lost, status %d lost reseeds %u", est.status, est.lost_reseeds);
+    // The last fix of the carry is already the first at rest
+    _run(&est, &r, 0, 0, _conf.kidnap_settle_ticks - 2 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST, "set down, not yet still for the settle time, status %d", est.status);
+    _run(&est, &r, 0, 0, 3 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1, "still for the settle time: a lost reseed, status %d lost reseeds %u", est.status, est.lost_reseeds);
+    _run(&est, &r, 10, 10, 150, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1, "motion reseeds, status %d seeds %u", est.status, est.seeds);
+    CHECK(hypotf(est.x - r.x, est.y - r.y) < 5.0f, "axle within 5 mm, %.2f off", hypotf(est.x - r.x, est.y - r.y));
+}
+
+/// Wheels turning at cl, cr while the robot does not move, a fix every TICKS_PER_FIX
+static void _run_in_air(db_pose_estimator_t *est, robot_t *r, int32_t cl, int32_t cr, uint32_t ticks) {
+    for (uint32_t t = 1; t <= ticks; t++) {
+        db_pose_estimator_predict(est, cl, cr, 1);
+        if ((t % TICKS_PER_FIX) == 0) {
+            float zx, zy;
+            _robot_sensor(r, LH2_NOISE_SD_MM, &zx, &zy);
+            db_pose_estimator_update(est, zx, zy);
+        }
+    }
+}
+
+static void test_free_spin_goes_lost(void) {
+    // Held in the air while seeding, the wheels spinning in place: the fixes
+    // stay put while odometry says the photodiode swings round, so LOST, and
+    // no pose to gate against until it rests on the floor again
+    db_pose_estimator_t est;
+    robot_t             r = { .x = 1000, .y = 1000, .theta = 0, .seed = 18 };
+    db_pose_estimator_init(&est, &_conf);
+    _run(&est, &r, 0, 0, 5 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING, "seeding at rest, status %d", est.status);
+    _run_in_air(&est, &r, 12, -12, 5 * TICKS_PER_FIX);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.free_spins == 1 && est.unseeded, "spinning in the air: lost, status %d free spins %u", est.status, est.free_spins);
+    _run_in_air(&est, &r, 12, -12, 100);
+    CHECK(est.status == DB_POSE_ESTIMATOR_LOST && est.seeds == 0 && est.lost_reseeds == 0, "still spinning: stays lost, status %d", est.status);
+    float zx, zy;
+    _robot_sensor(&r, 0, &zx, &zy);
+    est.x     = zx;
+    est.y     = zy - _conf.lever_mm;
+    est.theta = 0;
+    CHECK(db_pose_estimator_update(&est, zx, zy) == DB_POSE_ESTIMATOR_REJECTED && est.status == DB_POSE_ESTIMATOR_LOST, "no pose after a free spin, so a fix on the old one is not accepted, status %d", est.status);
+    _run(&est, &r, 0, 0, _conf.kidnap_settle_ticks + 3 * TICKS_PER_FIX, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_SEEDING && est.lost_reseeds == 1, "wheels stopped and fixes at rest: seeding again, status %d", est.status);
+    _run(&est, &r, 12, -12, 150, 1, LH2_NOISE_SD_MM);
+    CHECK(est.status == DB_POSE_ESTIMATOR_TRACKING && est.seeds == 1 && est.free_spins == 1, "a spin on the floor seeds, status %d seeds %u free spins %u", est.status, est.seeds, est.free_spins);
     CHECK(_angle_error_deg(est.theta, r.theta) < 5.0f, "heading within 5 deg, %.2f off", _angle_error_deg(est.theta, r.theta));
 }
 
@@ -718,6 +836,8 @@ int main(void) {
     test_kidnap_reseeds();
     test_outlier_still_no_kidnap();
     test_rejected_while_driving_times_out();
+    test_moved_while_driving_then_still();
+    test_lost_still_outlier_restarts_chain();
     test_occlusion_keeps_heading();
     test_fix_age_compensated();
     test_noise_scales_with_distance();
@@ -729,6 +849,8 @@ int main(void) {
     test_seed_carried_to_present();
     test_chain_survives_outlier();
     test_long_carry_times_out();
+    test_slow_carry_braked_no_reseed();
+    test_free_spin_goes_lost();
     test_covariance_stays_positive_definite();
     printf("%d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
