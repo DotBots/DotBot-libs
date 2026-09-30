@@ -448,6 +448,8 @@ void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basest
     } else {
         cam_y = -sin(alpha_1 / 2 - alpha_2 / 2 - 60 * M_PI / 180) / tan(M_PI / 6);
     };
+    // cam_y so far is -tan(elevation); the pinhole image point divides it by cos(azimuth)
+    cam_y *= sqrt(1 + cam_x * cam_x);
 
     double x_position = homography_matrix[basestation_index][0][0] * cam_x + homography_matrix[basestation_index][0][1] * cam_y + homography_matrix[basestation_index][0][2];
     double y_position = homography_matrix[basestation_index][1][0] * cam_x + homography_matrix[basestation_index][1][1] * cam_y + homography_matrix[basestation_index][1][2];
