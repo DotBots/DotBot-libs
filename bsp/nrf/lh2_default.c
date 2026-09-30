@@ -120,7 +120,7 @@ static const uint32_t _periods[LH2_BASESTATION_COUNT] = {
     919000,
     911000,
     907000,
-    901900,
+    901000,
     893000,
     887000,
 };
