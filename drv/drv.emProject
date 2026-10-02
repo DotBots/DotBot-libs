@@ -182,6 +182,15 @@
     <file file_name="pose_estimator/pose_estimator.c" />
     <file file_name="pose_estimator.h" />
   </project>
+  <project Name="00drv_lh2_geometry">
+    <configuration
+      Name="Common"
+      project_dependencies=""
+      project_directory="."
+      project_type="Library" />
+    <file file_name="lh2_geometry/lh2_geometry.c" />
+    <file file_name="lh2_geometry.h" />
+  </project>
   <project Name="00drv_wheel_control">
     <configuration
       Name="Common"

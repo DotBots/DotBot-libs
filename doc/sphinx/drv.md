@@ -18,6 +18,7 @@ _api/drv_geometry
 _api/drv_hdlc
 _api/drv_imu
 _api/drv_ism330
+_api/drv_lh2_geometry
 _api/drv_lis2mdl
 _api/drv_lis3mdl
 _api/drv_log_flash

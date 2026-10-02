@@ -128,12 +128,13 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
 	$(TEST_BUILD_DIR)/test_dotbot_control
 	$(TEST_BUILD_DIR)/test_dotbot_control_fleet
+	$(TEST_BUILD_DIR)/test_lh2_geometry
 
 $(TEST_BUILD_DIR)/test_wheel_control: tests/test_wheel_control.c drv/wheel_control/wheel_control.c drv/wheel_control.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
@@ -146,6 +147,10 @@ $(TEST_BUILD_DIR)/test_pose_estimator: tests/test_pose_estimator.c drv/pose_esti
 $(TEST_BUILD_DIR)/test_steering: tests/test_steering.c drv/steering/steering.c drv/steering.h drv/protocol.h drv/wheel_control/wheel_control.c drv/wheel_control.h drv/pose_estimator/pose_estimator.c drv/pose_estimator.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_steering.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c -lm
+
+$(TEST_BUILD_DIR)/test_lh2_geometry: tests/test_lh2_geometry.c drv/lh2_geometry/lh2_geometry.c drv/lh2_geometry.h
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_lh2_geometry.c drv/lh2_geometry/lh2_geometry.c -lm
 
 CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c
 CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h
