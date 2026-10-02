@@ -25,6 +25,7 @@
   <project Name="00bsp_dotbot_lh2">
     <configuration
       Name="Common"
+      gcc_optimization_level="Level 2 for size"
       project_dependencies="00bsp_timer_hf"
       project_directory="."
       project_type="Library" />
