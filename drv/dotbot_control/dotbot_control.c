@@ -259,6 +259,7 @@ void db_control_init(db_control_t *control, const db_control_conf_t *conf) {
     db_wheel_control_init(&control->wheel_right, &conf->wheel);
     db_pose_estimator_init(&control->estimator, &conf->estimator);
     db_steering_init(&control->steering, &conf->steering);
+    db_lh2_fusion_init(&control->fusion);
     control->drive_mode          = DB_CONTROL_DRIVE_IDLE;
     control->abort_reason        = DB_WAYPOINTS_ABORT_STOP;
     control->advert_period_ticks = _advert_period_ticks(0);
@@ -352,6 +353,14 @@ void db_control_rx(db_control_t *control, const uint8_t *packet, size_t length) 
     }
 }
 
+void db_control_lines(db_control_t *control, const db_lh2_floor_line_t *lines, uint8_t count) {
+    if (count > DB_CONTROL_LINES_MAX) {
+        count = DB_CONTROL_LINES_MAX;
+    }
+    memcpy(control->lines, lines, count * sizeof(lines[0]));
+    control->line_count = count;
+}
+
 bool db_control_fix_due(const db_control_t *control, uint32_t elapsed_ticks) {
     uint32_t tick = control->tick + (elapsed_ticks ? elapsed_ticks : 1U);
     return tick - control->tick_position >= TICKS_PER_POSITION;
@@ -381,6 +390,19 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
 
     db_pose_estimator_predict(&control->estimator, in->counts_left, in->counts_right, elapsed);
 
+    bool lines_accepted = control->line_count > 0;
+    for (uint8_t i = 0; i < control->line_count; i++) {
+        if (db_lh2_fusion_update(&control->fusion, &control->estimator, &control->lines[i]) != DB_POSE_ESTIMATOR_ACCEPTED) {
+            lines_accepted = false;
+        }
+    }
+    control->line_count = 0;
+    if (lines_accepted) {
+        // As an accepted fix does: the pose is confirmed, no kidnap is building
+        control->estimator.kidnap_count = 0;
+        control->estimator.chain_count  = 0;
+    }
+
     // An unchanged sequence is the previous solve read a second time
     if (_due(&control->tick_position, tick, TICKS_PER_POSITION) && in->fix_sequence != control->fix_sequence) {
         control->fix_sequence = in->fix_sequence;
@@ -388,7 +410,9 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
             control->position_x   = in->fix_x;
             control->position_y   = in->fix_y;
             control->has_position = true;
-            db_pose_estimator_update(&control->estimator, (float)in->fix_x, (float)in->fix_y);
+            if (!lines_accepted) {
+                db_pose_estimator_update(&control->estimator, (float)in->fix_x, (float)in->fix_y);
+            }
             db_steering_fix(&control->steering, (float)in->fix_x, (float)in->fix_y);
         }
     }

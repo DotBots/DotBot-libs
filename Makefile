@@ -157,8 +157,8 @@ $(TEST_BUILD_DIR)/test_lh2_fusion: tests/test_lh2_fusion.c drv/lh2_fusion/lh2_fu
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_lh2_fusion.c drv/lh2_fusion/lh2_fusion.c drv/lh2_geometry/lh2_geometry.c drv/pose_estimator/pose_estimator.c -lm
 
-CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c
-CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h
+CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c drv/lh2_fusion/lh2_fusion.c
+CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h drv/lh2_fusion.h drv/lh2_geometry.h
 
 $(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
