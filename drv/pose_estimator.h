@@ -248,6 +248,8 @@ typedef struct {
     float                           v_right;             ///< filtered right wheel speed, mm/s
     uint32_t                        still_ticks;         ///< consecutive predicts with both wheels standing, saturating
     float                           last_d2;             ///< squared Mahalanobis distance of the last gated fix
+    float                           last_line_d2;        ///< squared Mahalanobis distance of the last gated line
+    float                           last_innovation_mm;  ///< signed innovation of the last gated line, mm; NaN when the last line was not gated
     uint32_t                        predicts;            ///< predict calls, wraps
     uint32_t                        accepted;            ///< fixes applied, wraps
     uint32_t                        rejected;            ///< fixes rejected, wraps
@@ -308,6 +310,26 @@ void db_pose_estimator_predict(db_pose_estimator_t *est, int32_t counts_left, in
  * @return  what was done with the fix
  */
 db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, float x_mm, float y_mm);
+
+/**
+ * @brief   Take one LH2 sweep as a floor line of the photodiode, while TRACKING
+ *
+ * A scalar gated update of h(x) = n . (axle + lever(theta)) against d_mm, on
+ * the line moved forward by the photodiode travel since capture, as for a fix.
+ * Seeding and LOST keep using fixes. Sets last_line_d2 and last_innovation_mm,
+ * NaN unless the line was gated; the fix counters and the kidnap check are
+ * left to fixes.
+ *
+ * @param[in]   est         Estimator state
+ * @param[in]   nx          Normal of the line; normalised here if not unit
+ * @param[in]   ny          Normal of the line
+ * @param[in]   d_mm        The photodiode satisfies nx * x + ny * y = d_mm
+ * @param[in]   var_mm2     Variance along the normal
+ * @param[in]   gate        Squared Mahalanobis rejection threshold, 1 degree of freedom
+ *
+ * @return  ACCEPTED, or REJECTED outside the gate, unless TRACKING, or on a degenerate line
+ */
+db_pose_estimator_result_t db_pose_estimator_update_line(db_pose_estimator_t *est, float nx, float ny, float d_mm, float var_mm2, float gate);
 
 /**
  * @brief   Heading, while TRACKING

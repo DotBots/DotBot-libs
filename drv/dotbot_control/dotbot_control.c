@@ -51,7 +51,7 @@ _Static_assert(sizeof(db_control_input_t) == 24, "db_control_input_t is an ABI")
 _Static_assert(sizeof(db_control_output_t) == 8, "db_control_output_t is an ABI");
 _Static_assert(sizeof(db_control_report_t) == 64, "db_control_report_t is an ABI");
 _Static_assert(offsetof(db_control_report_t, direction) == 44, "db_control_report_t is an ABI");
-_Static_assert(DB_CONTROL_ADVERTISEMENT_BYTES == 2U + sizeof(int16_t) + sizeof(protocol_lh2_location_t) + sizeof(uint16_t) + 3U + 2U * sizeof(int32_t) + 2U * sizeof(uint32_t) + 1U + sizeof(protocol_waypoints_report_t),
+_Static_assert(DB_CONTROL_ADVERTISEMENT_BYTES == 1U + sizeof(uint16_t) + sizeof(int16_t) + sizeof(protocol_lh2_location_t) + sizeof(uint16_t) + 3U + 2U * sizeof(int32_t) + 2U * sizeof(uint32_t) + 1U + sizeof(protocol_waypoints_report_t),
                "db_control_advertisement() writes exactly this many bytes");
 _Static_assert(offsetof(db_control_report_t, pwm_left) == 50, "db_control_report_t is an ABI");
 
@@ -259,6 +259,7 @@ void db_control_init(db_control_t *control, const db_control_conf_t *conf) {
     db_wheel_control_init(&control->wheel_right, &conf->wheel);
     db_pose_estimator_init(&control->estimator, &conf->estimator);
     db_steering_init(&control->steering, &conf->steering);
+    db_lh2_fusion_init(&control->fusion);
     control->drive_mode          = DB_CONTROL_DRIVE_IDLE;
     control->abort_reason        = DB_WAYPOINTS_ABORT_STOP;
     control->advert_period_ticks = _advert_period_ticks(0);
@@ -352,6 +353,14 @@ void db_control_rx(db_control_t *control, const uint8_t *packet, size_t length) 
     }
 }
 
+void db_control_lines(db_control_t *control, const db_lh2_floor_line_t *lines, uint8_t count) {
+    if (count > DB_CONTROL_LINES_MAX) {
+        count = DB_CONTROL_LINES_MAX;
+    }
+    memcpy(control->lines, lines, count * sizeof(lines[0]));
+    control->line_count = count;
+}
+
 bool db_control_fix_due(const db_control_t *control, uint32_t elapsed_ticks) {
     uint32_t tick = control->tick + (elapsed_ticks ? elapsed_ticks : 1U);
     return tick - control->tick_position >= TICKS_PER_POSITION;
@@ -381,6 +390,19 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
 
     db_pose_estimator_predict(&control->estimator, in->counts_left, in->counts_right, elapsed);
 
+    bool lines_accepted = control->line_count > 0;
+    for (uint8_t i = 0; i < control->line_count; i++) {
+        if (db_lh2_fusion_update(&control->fusion, &control->estimator, &control->lines[i]) != DB_POSE_ESTIMATOR_ACCEPTED) {
+            lines_accepted = false;
+        }
+    }
+    control->line_count = 0;
+    if (lines_accepted) {
+        // As an accepted fix does: the pose is confirmed, no kidnap is building
+        control->estimator.kidnap_count = 0;
+        control->estimator.chain_count  = 0;
+    }
+
     // An unchanged sequence is the previous solve read a second time
     if (_due(&control->tick_position, tick, TICKS_PER_POSITION) && in->fix_sequence != control->fix_sequence) {
         control->fix_sequence = in->fix_sequence;
@@ -388,7 +410,9 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
             control->position_x   = in->fix_x;
             control->position_y   = in->fix_y;
             control->has_position = true;
-            db_pose_estimator_update(&control->estimator, (float)in->fix_x, (float)in->fix_y);
+            if (!lines_accepted) {
+                db_pose_estimator_update(&control->estimator, (float)in->fix_x, (float)in->fix_y);
+            }
             db_steering_fix(&control->steering, (float)in->fix_x, (float)in->fix_y);
         }
     }
@@ -513,9 +537,10 @@ size_t db_control_advertisement(db_control_t *control, uint16_t battery_level, u
     db_control_report_t report;
     db_control_report(control, &report);
 
-    size_t length    = 0;
-    buffer[length++] = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
-    buffer[length++] = 0xff;  // calibrated bitmask, unknown
+    size_t length       = 0;
+    buffer[length++]    = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
+    uint16_t calibrated = UINT16_MAX;  // calibrated station mask, unknown
+    _put(buffer, &length, &calibrated, sizeof(calibrated));
     _put(buffer, &length, &report.direction, sizeof(report.direction));
     protocol_lh2_location_t position = { .x = report.sensor_x, .y = report.sensor_y };
     _put(buffer, &length, &position, sizeof(position));

@@ -35,6 +35,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lh2_fusion.h"
+#include "lh2_geometry.h"
 #include "pose_estimator.h"
 #include "protocol.h"
 #include "steering.h"
@@ -43,7 +45,7 @@
 //=========================== defines ==========================================
 
 /// Version of the structs and functions below, for callers loading a built copy
-#define DB_CONTROL_ABI_VERSION (2U)
+#define DB_CONTROL_ABI_VERSION (3U)
 
 /// Period of one scheduler tick
 #define DB_CONTROL_TICK_MS (10U)
@@ -53,7 +55,10 @@
 #define DB_CONTROL_RX_MAX_BYTES (1U + sizeof(uint16_t) + 1U + DB_MAX_WAYPOINTS * (sizeof(protocol_lh2_location_t) + sizeof(int16_t)) + sizeof(protocol_lh2_waypoints_trailer_t))
 
 /// Length of the advertisement db_control_advertisement() writes
-#define DB_CONTROL_ADVERTISEMENT_BYTES (42U)
+#define DB_CONTROL_ADVERTISEMENT_BYTES (43U)
+
+/// Floor lines one tick can take: four stations, two sweeps each
+#define DB_CONTROL_LINES_MAX (8U)
 
 /// The advertisement's heading while the estimator has none
 #define DB_CONTROL_DIRECTION_INVALID (-1000)
@@ -129,35 +134,38 @@ typedef struct {
 
 /// One robot's control state
 typedef struct {
-    const db_control_conf_t   *conf;                  ///< gains, not owned
-    db_wheel_control_t         wheel_left;            ///< left wheel loop
-    db_wheel_control_t         wheel_right;           ///< right wheel loop
-    db_pose_estimator_t        estimator;             ///< pose estimator
-    db_steering_t              steering;              ///< steering along waypoints
-    db_control_drive_mode_t    drive_mode;            ///< which writer owns the motors
-    bool                       steering_brake;        ///< the steering holds the motors braked
-    uint8_t                    batch_id;              ///< of the last batch accepted, 0 for none
-    protocol_waypoints_abort_t abort_reason;          ///< what stopped the last batch
-    uint32_t                   tick;                  ///< ticks since init
-    uint32_t                   tick_position;         ///< tick of the last fix read
-    uint32_t                   tick_steering;         ///< tick of the last steering step
-    uint32_t                   tick_timeout;          ///< tick of the last deadman check
-    uint32_t                   tick_advert;           ///< tick of the last advertisement
-    uint32_t                   advert_period_ticks;   ///< ticks between advertisements
-    uint32_t                   last_command_tick;     ///< tick before the last direct or waypoint command
-    uint32_t                   fix_sequence;          ///< sequence of the last fix read
-    bool                       has_position;          ///< a fix in bounds has been read
-    uint32_t                   position_x;            ///< last fix in bounds, mm
-    uint32_t                   position_y;            ///< last fix in bounds, mm
-    uint32_t                   encoder_left;          ///< counts since init, wrapping
-    uint32_t                   encoder_right;         ///< counts since init, wrapping
-    uint32_t                   advert_encoder_left;   ///< encoder_left at the last advertisement
-    uint32_t                   advert_encoder_right;  ///< encoder_right at the last advertisement
-    db_control_output_t        pending;               ///< a motor write a command made, delivered by the next tick
-    int8_t                     pwm_left;              ///< last duty written, 0 while braked
-    int8_t                     pwm_right;             ///< last duty written, 0 while braked
-    bool                       brake_left;            ///< last brake written
-    bool                       brake_right;           ///< last brake written
+    const db_control_conf_t   *conf;                         ///< gains, not owned
+    db_wheel_control_t         wheel_left;                   ///< left wheel loop
+    db_wheel_control_t         wheel_right;                  ///< right wheel loop
+    db_pose_estimator_t        estimator;                    ///< pose estimator
+    db_steering_t              steering;                     ///< steering along waypoints
+    db_lh2_fusion_t            fusion;                       ///< per-station health of the LH2 sweeps fused
+    db_lh2_floor_line_t        lines[DB_CONTROL_LINES_MAX];  ///< staged for the next tick
+    uint8_t                    line_count;                   ///< lines staged
+    db_control_drive_mode_t    drive_mode;                   ///< which writer owns the motors
+    bool                       steering_brake;               ///< the steering holds the motors braked
+    uint8_t                    batch_id;                     ///< of the last batch accepted, 0 for none
+    protocol_waypoints_abort_t abort_reason;                 ///< what stopped the last batch
+    uint32_t                   tick;                         ///< ticks since init
+    uint32_t                   tick_position;                ///< tick of the last fix read
+    uint32_t                   tick_steering;                ///< tick of the last steering step
+    uint32_t                   tick_timeout;                 ///< tick of the last deadman check
+    uint32_t                   tick_advert;                  ///< tick of the last advertisement
+    uint32_t                   advert_period_ticks;          ///< ticks between advertisements
+    uint32_t                   last_command_tick;            ///< tick before the last direct or waypoint command
+    uint32_t                   fix_sequence;                 ///< sequence of the last fix read
+    bool                       has_position;                 ///< a fix in bounds has been read
+    uint32_t                   position_x;                   ///< last fix in bounds, mm
+    uint32_t                   position_y;                   ///< last fix in bounds, mm
+    uint32_t                   encoder_left;                 ///< counts since init, wrapping
+    uint32_t                   encoder_right;                ///< counts since init, wrapping
+    uint32_t                   advert_encoder_left;          ///< encoder_left at the last advertisement
+    uint32_t                   advert_encoder_right;         ///< encoder_right at the last advertisement
+    db_control_output_t        pending;                      ///< a motor write a command made, delivered by the next tick
+    int8_t                     pwm_left;                     ///< last duty written, 0 while braked
+    int8_t                     pwm_right;                    ///< last duty written, 0 while braked
+    bool                       brake_left;                   ///< last brake written
+    bool                       brake_right;                  ///< last brake written
 } db_control_t;
 
 /// The DotBot v3 gains and limits the app runs with
@@ -209,6 +217,23 @@ void db_control_rx(db_control_t *control, const uint8_t *packet, size_t length);
  * @return  true if the next tick reads the fix
  */
 bool db_control_fix_due(const db_control_t *control, uint32_t elapsed_ticks);
+
+/**
+ * @brief   Stage the LH2 floor lines read with this tick's fix
+ *
+ * The next db_control_tick() fuses them into the estimator after its predict,
+ * while the estimator tracks. When every one is accepted, that tick's fix
+ * feeds the steering and the advertisement but not the estimator, since it
+ * comes from the same sweeps; when any is rejected, the fix is used as
+ * without lines, so its gate and the kidnap check still see the jump. Lines beyond
+ * DB_CONTROL_LINES_MAX are dropped, and a second call before the tick
+ * replaces the first.
+ *
+ * @param[in,out]   control     Robot state
+ * @param[in]       lines       Floor lines
+ * @param[in]       count       Lines in lines
+ */
+void db_control_lines(db_control_t *control, const db_lh2_floor_line_t *lines, uint8_t count);
 
 /**
  * @brief   Run one scheduler tick

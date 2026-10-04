@@ -74,7 +74,7 @@
   <project Name="01bsp_lighthouse">
     <configuration
       Name="Common"
-      project_dependencies="00bsp_dotbot_board(bsp);00bsp_dotbot_lh2(bsp)"
+      project_dependencies="00bsp_dotbot_board(bsp);00bsp_dotbot_lh2(bsp);00drv_lh2_geometry(drv)"
       project_directory="01bsp_lighthouse"
       project_type="Executable" />
     <folder Name="Setup">

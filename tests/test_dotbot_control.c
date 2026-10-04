@@ -517,16 +517,16 @@ static void test_advertisement(void) {
     }
     CHECK(adverts == 2, "advert: every 500 ms while not joined, %u in 1 s", adverts);
     CHECK(length == DB_CONTROL_ADVERTISEMENT_BYTES, "advert: %u bytes", (unsigned)length);
-    CHECK(buf[0] == DB_PROTOCOL_DOTBOT_ADVERTISEMENT && buf[1] == 0xff, "advert: type and calibrated bitmask");
+    CHECK(buf[0] == DB_PROTOCOL_DOTBOT_ADVERTISEMENT && buf[1] == 0xff && buf[2] == 0xff, "advert: type and calibrated station mask");
     uint16_t battery;
-    memcpy(&battery, &buf[12], sizeof(battery));
-    CHECK(battery == 3000, "advert: battery at offset 12, %u", battery);
-    CHECK(buf[16] == ControlAuto, "advert: auto while a batch is active");
+    memcpy(&battery, &buf[13], sizeof(battery));
+    CHECK(battery == 3000, "advert: battery at offset 13, %u", battery);
+    CHECK(buf[17] == ControlAuto, "advert: auto while a batch is active");
     int32_t encoder_left;
-    memcpy(&encoder_left, &buf[17], sizeof(encoder_left));
+    memcpy(&encoder_left, &buf[18], sizeof(encoder_left));
     CHECK(encoder_left > 0 && (uint32_t)encoder_left < s.control.encoder_left, "advert: encoder counts since the previous advertisement, %d of %u", encoder_left, s.control.encoder_left);
     protocol_waypoints_report_t report;
-    memcpy(&report, &buf[34], sizeof(report));
+    memcpy(&report, &buf[35], sizeof(report));
     CHECK(report.status == DB_WAYPOINTS_IN_PROGRESS && report.batch_id == 3, "advert: waypoint report in progress, batch 3");
 
     db_control_set_min_tx_interval(&s.control, 100000U);
@@ -597,6 +597,95 @@ static void test_lifted_spins_once(void) {
     CHECK(report.brake_left && report.brake_right, "lifted: braked");
 }
 
+/// Runs ticks with two lines through each new fix staged before the tick,
+/// both shifted by offset_mm
+static void _run_with_lines(sim_t *s, uint32_t ticks, float offset_mm) {
+    for (uint32_t i = 0; i < ticks; i++) {
+        db_control_input_t in;
+        _plant_step(&s->plant, &in);
+        if (s->plant.tick % PLANT_FIX_EVERY == 0) {
+            db_lh2_floor_line_t lines[2] = {
+                { .nx = 1, .ny = 0, .d_mm = (float)in.fix_x + offset_mm, .var_mm2 = 4, .station = 3, .sweep = 0 },
+                { .nx = 0, .ny = 1, .d_mm = (float)in.fix_y + offset_mm, .var_mm2 = 4, .station = 3, .sweep = 1 },
+            };
+            db_control_lines(&s->control, lines, 2);
+        }
+        db_control_tick(&s->control, &in, &s->out);
+        _plant_apply(&s->plant, &s->out);
+    }
+}
+
+static void test_lines_replace_the_fix(void) {
+    sim_t s;
+    _sim_init(&s, 1);
+    _run_with_lines(&s, 200, 0);
+    const db_pose_estimator_t *est = &s.control.estimator;
+    CHECK(s.control.fusion.station[3].accepted == 40 && s.control.fusion.station[3].rejected == 0, "lines: both lines of every fix fused, %u accepted", s.control.fusion.station[3].accepted);
+    CHECK(est->accepted == 0 && est->rejected == 0, "lines: the fix from the same sweeps is not applied as well, %u fixes", est->accepted);
+    CHECK(est->status == DB_POSE_ESTIMATOR_TRACKING && s.control.has_position && s.control.line_count == 0, "lines: still tracking, the fix kept for the advertisement, nothing left staged");
+    db_control_report_t report;
+    db_control_report(&s.control, &report);
+    CHECK(hypotf((float)report.sensor_x - s.plant.px[0], (float)report.sensor_y - s.plant.py[0]) < 3.0f, "lines: the advertised photodiode follows the truth");
+
+    // Lines all outside the gate: the fix is gated as without lines
+    _run_with_lines(&s, 50, 200.0f);
+    CHECK(s.control.fusion.station[3].rejected == 10 && est->accepted == 5, "lines rejected: the fix is used instead, %u rejected lines, %u fixes", s.control.fusion.station[3].rejected, est->accepted);
+}
+
+/// One tick with lines through the fix, the fix and both lines moved by (dx, dy)
+static void _tick_with_lines_offset(sim_t *s, float dx, float dy) {
+    db_control_input_t in;
+    _plant_step(&s->plant, &in);
+    if (s->plant.tick % PLANT_FIX_EVERY == 0) {
+        in.fix_x                     = (uint32_t)lroundf((float)in.fix_x + dx);
+        in.fix_y                     = (uint32_t)lroundf((float)in.fix_y + dy);
+        in.fix_sequence              = s->plant.fix_sequence + 1000000U;
+        db_lh2_floor_line_t lines[2] = {
+            { .nx = 1, .ny = 0, .d_mm = (float)in.fix_x, .var_mm2 = 4, .station = 3, .sweep = 0 },
+            { .nx = 0, .ny = 1, .d_mm = (float)in.fix_y, .var_mm2 = 4, .station = 3, .sweep = 1 },
+        };
+        db_control_lines(&s->control, lines, 2);
+    }
+    db_control_tick(&s->control, &in, &s->out);
+    _plant_apply(&s->plant, &s->out);
+}
+
+static void test_lines_keep_the_kidnap_check(void) {
+    // Moved 300 mm along one line's direction: that line still agrees, the
+    // other does not, so the fix is gated and the kidnap is seen
+    sim_t s;
+    _sim_init(&s, 1);
+    _run_with_lines(&s, 200, 0);
+    for (uint32_t i = 0; i < 100; i++) {
+        _tick_with_lines_offset(&s, 0, 300.0f);
+    }
+    CHECK(s.control.estimator.kidnaps == 1 && s.control.estimator.status == DB_POSE_ESTIMATOR_SEEDING, "lines: a kidnap along one line's direction is still caught, %u kidnaps, status %u", s.control.estimator.kidnaps, s.control.estimator.status);
+}
+
+static void test_lines_clear_a_building_kidnap(void) {
+    // A reflection on every tenth fix of a robot at rest is not a kidnap:
+    // the good ticks between them confirm the pose
+    sim_t s;
+    _sim_init(&s, 1);
+    _run_with_lines(&s, 200, 0);
+    for (uint32_t i = 0; i < 2000; i++) {
+        float off = ((s.plant.tick + 1) % (10 * PLANT_FIX_EVERY) == 0) ? 150.0f : 0.0f;
+        _tick_with_lines_offset(&s, off, off);
+    }
+    CHECK(s.control.estimator.kidnaps == 0 && s.control.estimator.status == DB_POSE_ESTIMATOR_TRACKING, "lines: recurring reflections at rest cause no kidnap, %u kidnaps, status %u", s.control.estimator.kidnaps, s.control.estimator.status);
+}
+
+static void test_lines_ignored_while_seeding(void) {
+    sim_t s;
+    _sim_init(&s, 0);
+    _send_velocity(&s, 150, 150);
+    for (uint32_t i = 0; i < 100 && s.control.estimator.seeds == 0; i++) {
+        _run_with_lines(&s, 1, 0);
+    }
+    CHECK(s.control.estimator.status == DB_POSE_ESTIMATOR_TRACKING && s.control.estimator.seeds == 1, "seeding: the fixes seed the pose as without lines");
+    CHECK(s.control.fusion.station[3].accepted == 0 && s.control.fusion.station[3].rejected == 0, "seeding: lines until then are not counted");
+}
+
 int main(void) {
     test_batch_seeded();
     test_seed();
@@ -611,6 +700,10 @@ int main(void) {
     test_fix_due();
     test_many_robots_independent();
     test_lifted_spins_once();
+    test_lines_replace_the_fix();
+    test_lines_ignored_while_seeding();
+    test_lines_keep_the_kidnap_check();
+    test_lines_clear_a_building_kidnap();
     printf("dotbot_control: %d passed, %d failed\n", _passed, _failed);
     return _failed ? 1 : 0;
 }
