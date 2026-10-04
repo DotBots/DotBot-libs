@@ -74,21 +74,21 @@ static void test_advertisements(void) {
         const uint8_t *packet = packets + k * DB_CONTROL_ADVERTISEMENT_BYTES;
         uint16_t       level;
         int32_t        encoder_left;
-        memcpy(&level, &packet[12], sizeof(level));
-        memcpy(&encoder_left, &packet[17], sizeof(encoder_left));
+        memcpy(&level, &packet[13], sizeof(level));
+        memcpy(&encoder_left, &packet[18], sizeof(encoder_left));
         CHECK(packet[0] == DB_PROTOCOL_DOTBOT_ADVERTISEMENT, "advertisements: packet %u is an advertisement", k);
         CHECK(level == 3000 + index[k], "advertisements: packet %u carries its robot's battery, %u", k, level);
         CHECK(encoder_left == (int32_t)index[k], "advertisements: packet %u carries its robot's counts, %d", k, encoder_left);
     }
     int16_t direction;
-    memcpy(&direction, &packets[DB_CONTROL_ADVERTISEMENT_BYTES + 2], sizeof(direction));
+    memcpy(&direction, &packets[DB_CONTROL_ADVERTISEMENT_BYTES + 3], sizeof(direction));
     CHECK(direction == 0, "advertisements: the seeded robot advertises its heading, %d", direction);
 
     CHECK(fleet_advertisements(battery, buffer) == 0, "advertisements: a second call finds none due");
     uint8_t single[DB_CONTROL_ADVERTISEMENT_BYTES];
     fleet_advertisement(1, 3001, single);
     int32_t encoder_left;
-    memcpy(&encoder_left, &single[17], sizeof(encoder_left));
+    memcpy(&encoder_left, &single[18], sizeof(encoder_left));
     CHECK(encoder_left == 0, "advertisements: the batch started robot 1's encoder deltas over, %d", encoder_left);
 }
 

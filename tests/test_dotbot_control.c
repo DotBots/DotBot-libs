@@ -517,16 +517,16 @@ static void test_advertisement(void) {
     }
     CHECK(adverts == 2, "advert: every 500 ms while not joined, %u in 1 s", adverts);
     CHECK(length == DB_CONTROL_ADVERTISEMENT_BYTES, "advert: %u bytes", (unsigned)length);
-    CHECK(buf[0] == DB_PROTOCOL_DOTBOT_ADVERTISEMENT && buf[1] == 0xff, "advert: type and calibrated bitmask");
+    CHECK(buf[0] == DB_PROTOCOL_DOTBOT_ADVERTISEMENT && buf[1] == 0xff && buf[2] == 0xff, "advert: type and calibrated station mask");
     uint16_t battery;
-    memcpy(&battery, &buf[12], sizeof(battery));
-    CHECK(battery == 3000, "advert: battery at offset 12, %u", battery);
-    CHECK(buf[16] == ControlAuto, "advert: auto while a batch is active");
+    memcpy(&battery, &buf[13], sizeof(battery));
+    CHECK(battery == 3000, "advert: battery at offset 13, %u", battery);
+    CHECK(buf[17] == ControlAuto, "advert: auto while a batch is active");
     int32_t encoder_left;
-    memcpy(&encoder_left, &buf[17], sizeof(encoder_left));
+    memcpy(&encoder_left, &buf[18], sizeof(encoder_left));
     CHECK(encoder_left > 0 && (uint32_t)encoder_left < s.control.encoder_left, "advert: encoder counts since the previous advertisement, %d of %u", encoder_left, s.control.encoder_left);
     protocol_waypoints_report_t report;
-    memcpy(&report, &buf[34], sizeof(report));
+    memcpy(&report, &buf[35], sizeof(report));
     CHECK(report.status == DB_WAYPOINTS_IN_PROGRESS && report.batch_id == 3, "advert: waypoint report in progress, batch 3");
 
     db_control_set_min_tx_interval(&s.control, 100000U);

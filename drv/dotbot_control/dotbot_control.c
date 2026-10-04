@@ -51,7 +51,7 @@ _Static_assert(sizeof(db_control_input_t) == 24, "db_control_input_t is an ABI")
 _Static_assert(sizeof(db_control_output_t) == 8, "db_control_output_t is an ABI");
 _Static_assert(sizeof(db_control_report_t) == 64, "db_control_report_t is an ABI");
 _Static_assert(offsetof(db_control_report_t, direction) == 44, "db_control_report_t is an ABI");
-_Static_assert(DB_CONTROL_ADVERTISEMENT_BYTES == 2U + sizeof(int16_t) + sizeof(protocol_lh2_location_t) + sizeof(uint16_t) + 3U + 2U * sizeof(int32_t) + 2U * sizeof(uint32_t) + 1U + sizeof(protocol_waypoints_report_t),
+_Static_assert(DB_CONTROL_ADVERTISEMENT_BYTES == 1U + sizeof(uint16_t) + sizeof(int16_t) + sizeof(protocol_lh2_location_t) + sizeof(uint16_t) + 3U + 2U * sizeof(int32_t) + 2U * sizeof(uint32_t) + 1U + sizeof(protocol_waypoints_report_t),
                "db_control_advertisement() writes exactly this many bytes");
 _Static_assert(offsetof(db_control_report_t, pwm_left) == 50, "db_control_report_t is an ABI");
 
@@ -537,9 +537,10 @@ size_t db_control_advertisement(db_control_t *control, uint16_t battery_level, u
     db_control_report_t report;
     db_control_report(control, &report);
 
-    size_t length    = 0;
-    buffer[length++] = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
-    buffer[length++] = 0xff;  // calibrated bitmask, unknown
+    size_t length       = 0;
+    buffer[length++]    = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
+    uint16_t calibrated = UINT16_MAX;  // calibrated station mask, unknown
+    _put(buffer, &length, &calibrated, sizeof(calibrated));
     _put(buffer, &length, &report.direction, sizeof(report.direction));
     protocol_lh2_location_t position = { .x = report.sensor_x, .y = report.sensor_y };
     _put(buffer, &length, &position, sizeof(position));

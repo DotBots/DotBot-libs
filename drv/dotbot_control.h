@@ -45,7 +45,7 @@
 //=========================== defines ==========================================
 
 /// Version of the structs and functions below, for callers loading a built copy
-#define DB_CONTROL_ABI_VERSION (2U)
+#define DB_CONTROL_ABI_VERSION (3U)
 
 /// Period of one scheduler tick
 #define DB_CONTROL_TICK_MS (10U)
@@ -55,7 +55,7 @@
 #define DB_CONTROL_RX_MAX_BYTES (1U + sizeof(uint16_t) + 1U + DB_MAX_WAYPOINTS * (sizeof(protocol_lh2_location_t) + sizeof(int16_t)) + sizeof(protocol_lh2_waypoints_trailer_t))
 
 /// Length of the advertisement db_control_advertisement() writes
-#define DB_CONTROL_ADVERTISEMENT_BYTES (42U)
+#define DB_CONTROL_ADVERTISEMENT_BYTES (43U)
 
 /// Floor lines one tick can take: four stations, two sweeps each
 #define DB_CONTROL_LINES_MAX (8U)
