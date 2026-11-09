@@ -744,22 +744,31 @@ static void test_fix_from_every_station_before_heading(void) {
     CHECK(step <= 1.0f && hypotf(ox, oy) <= 1.0f, "no heading, one station: its intersection, (%.1f, %.1f) mm off, step %.1f", ox, oy, step);
 }
 
-static void test_fix_falls_back_without_a_crossing(void) {
-    sim_t s;
-    _sim_init(&s, 0);
+/// Runs a robot at rest with no heading, staging with each new fix two
+/// near-parallel lines through the input's solve moved by off_mm along x
+static void _near_parallel(sim_t *s, float off_mm) {
+    _sim_init(s, 0);
     for (uint32_t i = 0; i < 20; i++) {
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
-        if (s.plant.tick % PLANT_FIX_EVERY == 0) {
+        _plant_step(&s->plant, &in);
+        if (s->plant.tick % PLANT_FIX_EVERY == 0) {
+            float               x = (float)in.fix_x + off_mm, y = (float)in.fix_y;
             db_lh2_floor_line_t lines[2] = {
-                { .nx = 1, .ny = 0, .d_mm = 500, .var_mm2 = 1, .station = 0, .sweep = 0 },
-                { .nx = 1, .ny = 0.01f, .d_mm = 520, .var_mm2 = 1, .station = 1, .sweep = 0 },
+                { .nx = 1, .ny = 0, .d_mm = x, .var_mm2 = 1, .station = 0, .sweep = 0 },
+                { .nx = 1, .ny = 0.01f, .d_mm = x + 0.01f * y, .var_mm2 = 1, .station = 1, .sweep = 0 },
             };
-            db_control_lines(&s.control, lines, 2);
+            db_control_lines(&s->control, lines, 2);
         }
-        db_control_tick(&s.control, &in, &s.out);
+        db_control_tick(&s->control, &in, &s->out);
     }
+}
+
+static void test_fix_falls_back_without_a_crossing(void) {
+    sim_t s;
+    _near_parallel(&s, 0);
     CHECK(s.control.has_position && s.control.position_x == s.plant.fix_x && s.control.position_y == s.plant.fix_y, "near-parallel lines: the input's solve is the fix, (%u, %u)", s.control.position_x, s.control.position_y);
+    _near_parallel(&s, 20.0f);
+    CHECK(!s.control.has_position && !s.control.last_fusion.fix_valid, "near-parallel lines 20 mm off the input's solve: no fix");
 }
 
 static void test_fix_leaves_out_a_rejected_station(void) {
@@ -798,9 +807,10 @@ static void test_fusion_record_before_heading_and_on_fallback(void) {
         db_control_input_t in;
         _plant_step(&s.plant, &in);
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
+            float               x = (float)in.fix_x, y = (float)in.fix_y;
             db_lh2_floor_line_t lines[2] = {
-                { .nx = 1, .ny = 0, .d_mm = 500, .var_mm2 = 1, .station = 0, .sweep = 0 },
-                { .nx = 1, .ny = 0.01f, .d_mm = 520, .var_mm2 = 1, .station = 5, .sweep = 1 },
+                { .nx = 1, .ny = 0, .d_mm = x, .var_mm2 = 1, .station = 0, .sweep = 0 },
+                { .nx = 1, .ny = 0.01f, .d_mm = x + 0.01f * y, .var_mm2 = 1, .station = 5, .sweep = 1 },
             };
             db_control_lines(&s.control, lines, 2);
         }
