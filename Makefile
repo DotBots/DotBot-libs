@@ -97,7 +97,7 @@ ARTIFACT_HEX = $(ARTIFACT_ELF:.elf=.hex)
 ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 
-.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test test-long wasm
+.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test test-long test-sanitize wasm
 
 all: $(PROJECTS)
 
@@ -142,6 +142,12 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 # LFSR search over all 32 polynomials
 test-long: $(TEST_BUILD_DIR)/test_lh2_baseline
 	$(TEST_BUILD_DIR)/test_lh2_baseline --long
+
+# Every host suite again, under AddressSanitizer and UndefinedBehaviorSanitizer
+SANITIZE_FLAGS ?= -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
+
+test-sanitize:
+	$(MAKE) test TEST_BUILD_DIR=build/tests-sanitize HOST_CFLAGS="$(HOST_CFLAGS) $(SANITIZE_FLAGS)"
 
 $(TEST_BUILD_DIR)/test_wheel_control: tests/test_wheel_control.c drv/wheel_control/wheel_control.c drv/wheel_control.h drv/geometry.h
 	@mkdir -p $(TEST_BUILD_DIR)
