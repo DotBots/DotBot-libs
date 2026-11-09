@@ -2,61 +2,33 @@
  * @file
  * @ingroup bsp_lh2
  *
- * @brief  nRF52833-specific definition of the "lh2" bsp module.
+ * @brief  nRF52 and nRF5340-app capture layer of the "lh2" bsp module
  *
  * @author Filip Maksimovic <filip.maksimovic@inria.fr>
  * @author Said Alvarado-Marin <said-alexander.alvarado-marin@inria.fr>
  * @author Alexandre Abadie <alexandre.abadie@inria.fr>
  *
- * @copyright Inria, 2022
+ * @copyright Inria, 2022-present
  */
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
 #include <nrf.h>
-#include <math.h>
 
 #include "gpio.h"
 #include "lh2.h"
 #include "lh2_decoder.h"
-#include "lh2_checkpoints.h"
-#include "lh2_geometry.h"
 #include "timer_hf.h"
 #include "board_config.h"
 
 //=========================== defines =========================================
 
-_Static_assert(LH2_BASESTATION_COUNT == DB_LH2_GEOMETRY_STATIONS, "lh2_geometry carries a period per basestation");
-
-#define SPIM_INTERRUPT_PRIORITY 2   ///< Interrupt priority, as high as it will go
-#define SPI_BUFFER_SIZE         64  ///< Size of buffers used for SPI communications
-#if defined(BOARD_DOTBOT_V3)
-#define SPI_FAKE_SCK_PIN 7  ///< NOTE: SPIM needs an SCK pin to be defined, P1.6 is used because it's not an available pin in the BCM module.
-#else
-#define SPI_FAKE_SCK_PIN 6  ///< NOTE: SPIM needs an SCK pin to be defined, P1.6 is used because it's not an available pin in the BCM module.
-#endif
-#define SPI_FAKE_SCK_PORT                      1                                                              ///< NOTE: SPIM needs an SCK pin to be defined, P1.6 is used because it's not an available pin in the BCM module.
-#define FUZZY_CHIP                             0xFF                                                           ///< not sure what this is about
-#define LH2_LOCATION_ERROR_INDICATOR           0xFFFFFFFF                                                     ///< indicate the location value is false
-#define LH2_POLYNOMIAL_ERROR_INDICATOR         0xFF                                                           ///< indicate the polynomial index is invalid
-#define POLYNOMIAL_BIT_ERROR_INITIAL_THRESHOLD 4                                                              ///< initial threshold of polynomial error
-#define LH2_BUFFER_SIZE                        10                                                             ///< Amount of lh2 frames the buffer can contain
-#define GPIOTE_CH_IN_ENV_HiToLo                1                                                              ///< falling edge gpio channel
-#define GPIOTE_CH_IN_ENV_LoToHi                2                                                              ///< rising edge gpio channel
-#define PPI_SPI_START_CHAN                     2                                                              ///< PPI channel for starting the GPIOTE to SPI capture ppi
-#define PPI_SPI_GROUP                          0                                                              ///< PPI group for automatically dissabling the ppi after a successful spi capture
-#define HASH_TABLE_BITS                        11                                                             ///< How many bits will be used for the hashtable for the _end_buffers
-#define HASH_TABLE_SIZE                        (1 << HASH_TABLE_BITS)                                         ///< How big will the hashtable for the _end_buffers
-#define HASH_TABLE_MASK                        ((1 << HASH_TABLE_BITS) - 1)                                   ///< Mask selecting the HAS_TABLE_BITS least significant bits
-#define NUM_LSFR_COUNT_CHECKPOINTS             64                                                             ///< How many lsfr checkpoints are per polynomial
-#define DISTANCE_BETWEEN_LSFR_CHECKPOINTS      2048                                                           ///< How many lsfr checkpoints are per polynomial
-#define CHECKPOINT_TABLE_BITS                  6                                                              ///< How many bits will be used for the checkpoint table for the lfsr search
-#define CHECKPOINT_TABLE_MASK_LOW              ((1 << CHECKPOINT_TABLE_BITS) - 1)                             ///< How big will the checkpoint table for the lfsr search
-#define CHECKPOINT_TABLE_MASK_HIGH             (((1 << CHECKPOINT_TABLE_BITS) - 1) << CHECKPOINT_TABLE_BITS)  ///< Mask selecting the CHECKPOINT_TABLE_BITS least significant bits
-#define LH2_MAX_DATA_VALID_TIME_US             2000000                                                        //< Data older than this is considered outdate and should be erased (in microseconds)
-#define LH2_SWEEP_PERIOD_US                    20000                                                          ///< time, in microseconds, between two full rotations of the LH2 motor
-#define LH2_SWEEP_PERIOD_THRESHOLD_US          1000                                                           ///< How close a LH2 pulse must arrive relative to LH2_SWEEP_PERIOD_US, to be considered the same type of sweep (first sweep or second second). (in microseconds)
+#define SPIM_INTERRUPT_PRIORITY 2  ///< Interrupt priority, as high as it will go
+#define GPIOTE_CH_IN_ENV_HiToLo 1  ///< falling edge gpio channel
+#define GPIOTE_CH_IN_ENV_LoToHi 2  ///< rising edge gpio channel
+#define PPI_SPI_START_CHAN      2  ///< PPI channel for starting the GPIOTE to SPI capture ppi
+#define PPI_SPI_GROUP           0  ///< PPI group for automatically dissabling the ppi after a successful spi capture
 #if defined(NRF5340_XXAA) && defined(NRF_APPLICATION)
 #define LH2_TIMER_DEV 2  ///< Timer device used for LH2
 #else
@@ -81,69 +53,20 @@ _Static_assert(LH2_BASESTATION_COUNT == DB_LH2_GEOMETRY_STATIONS, "lh2_geometry 
 #endif
 
 typedef struct {
-    uint8_t  buffer[LH2_BUFFER_SIZE][SPI_BUFFER_SIZE];  ///< arrays of bits for local storage, contents of SPI transfer are copied into this
-    uint32_t timestamps[LH2_BUFFER_SIZE];               ///< arrays of timestamps of when different SPI transfers happened
-    uint8_t  write_index;                               // Index for next write
-    uint8_t  read_index;                                // Index for next read
-    uint8_t  count;                                     // Number of arrays in buffer
-} lh2_ring_buffer_t;
-
-///< List of rotational periods (in microseconds) of the lighthouse basestation in all its 16 modes.
-static const uint16_t _lh2_sweep_period_us[LH2_BASESTATION_COUNT] = {
-    19979,
-    19938,
-    19854,
-    19771,
-    19729,
-    19646,
-    19604,
-    19563,
-    19521,
-    19354,
-    19146,
-    18979,
-    18896,
-    18771,
-    18604,
-    18479,
-};
-
-typedef struct {
-    uint8_t            spi_rx_buffer[SPI_BUFFER_SIZE];  ///< buffer where data coming from SPI are stored
-    lh2_ring_buffer_t  data;                            ///< array containing demodulation data of each locations
-    _lfsr_checkpoint_t checkpoint;                      ///< Dynamic checkpoints for the lsfr index search
+    uint8_t        spi_rx_buffer[DB_LH2_CAPTURE_BYTES];  ///< the SPIM's DMA buffer
+    db_lh2_queue_t queue;                                ///< captures not yet popped
 } lh2_vars_t;
 
 //=========================== variables ========================================
 
-static uint16_t _end_buffers_hashtable[HASH_TABLE_SIZE] = { 0 };
-
-// Dynamic checkpoint
-static uint32_t _lfsr_checkpoint_bits[LH2_POLYNOMIAL_COUNT][LH2_SWEEP_COUNT]  = { 0 };  ///<
-static uint32_t _lfsr_checkpoint_count[LH2_POLYNOMIAL_COUNT][LH2_SWEEP_COUNT] = { 0 };
-static uint32_t _lsfr_checkpoint_average                                      = 0;
-
-///! NOTE: SPIM needs an SCK pin to be defined, P1.6 is used because it's not an available pin in the BCM module
-static const gpio_t _lh2_spi_fake_sck_gpio = {
-    .port = 1,
-    .pin  = 3,
-};
-
-///< Encodes in two bits which sweep slot of a particular basestation is empty, (1 means data, 0 means empty)
-typedef enum {
-    LH2_SWEEP_BOTH_SLOTS_EMPTY,   ///< Both sweep slots are empty
-    LH2_SWEEP_SECOND_SLOT_EMPTY,  ///< Only the second sweep slot is empty
-    LH2_SWEEP_FIRST_SLOT_EMPTY,   ///< Only the first sweep slot is empty
-    LH2_SWEEP_BOTH_SLOTS_FULL,    ///< Both sweep slots are filled with raw data
-} db_lh2_sweep_slot_state_t;
-
-static double homography_matrix[LH2_BASESTATION_COUNT][3][3] = { 0 };
+/// Pins the SPIM drives as SCK and MOSI: it only receives, on the data line, but runs with both
+static const gpio_t _lh2_spi_fake_sck_gpio  = { .port = 1, .pin = 3 };
+static const gpio_t _lh2_spi_fake_mosi_gpio = { .port = 1, .pin = 4 };
 
 static lh2_vars_t _lh2_vars;  ///< local data of the LH2 driver
 
 //=========================== prototypes =======================================
 
-// these functions are called in the order written to perform the LH2 localization
 /**
  * @brief wiggle the data and envelope lines in a magical way to configure the TS4231 to continuously read for LH2 sweep signals.
  *
@@ -152,16 +75,6 @@ static lh2_vars_t _lh2_vars;  ///< local data of the LH2 driver
  * @return bool
  */
 bool _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e);
-
-/**
- * @brief finds the position of a 17-bit sequence (bits) in the sequence generated by polynomial3 with initial seed 1
- *
- * @param[in] index: index of polynomial
- * @param[in] bits: 17-bit sequence
- *
- * @return count: location of the sequence
- */
-uint32_t _reverse_count_p(uint8_t index, uint32_t bits);
 
 /**
  * @brief Set a gpio as an INPUT with no pull-up or pull-down
@@ -183,60 +96,20 @@ void _lh2_pin_set_output(const gpio_t *gpio);
 void _gpiote_setup(const gpio_t *gpio_e);
 
 /**
- * @brief start SPI3 at falling edge of envelope, start timer2 at falling edge of envelope, stop/capture timer2 at rising edge of envelope
+ * @brief start the SPIM at the falling edge of the envelope, and disarm until re-armed
  */
 void _ppi_setup(void);
 
 /**
- * @brief spi3 setup
+ * @brief SPIM setup
  *
  * @param[in]   gpio_d  pointer to gpio data
  */
 void _spi_setup(const gpio_t *gpio_d);
 
-/**
- * @brief add one element to the ring buffer for spi captures
- *
- * @param[in]   cb          pointer to ring buffer structure
- * @param[in]   data        pointer to the data array to save in the ring buffer
- * @param[in]   timestamp   timestamp of when the LH2 measurement was taken. (taken with timer_hf_now())
- */
-void _add_to_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t timestamp);
-
-/**
- * @brief retreive the oldest element from the ring buffer for spi captures
- *
- * @param[in]    cb          pointer to ring buffer structure
- * @param[out]   data        pointer to the array where the ring buffer data will be saved
- * @param[out]   timestamp   timestamp of when the LH2 measurement was taken. (taken with timer_hf_now())
- */
-bool _get_from_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t *timestamp);
-
-/**
- * @brief Accesses the global tables _lfsr_checkpoint_hashtable & _lfsr_checkpoint_count
- *        and updates them with the last found polynomial count
- *
- * @param[in] polynomial: index of polynomial
- * @param[in] bits: 17-bit sequence
- * @param[in] count: position of the received laser sweep in the LSFR sequence
- * @param[in] sweep: index of the sweep (0 or 1)
- */
-void _update_lfsr_checkpoints(uint8_t polynomial, uint32_t bits, uint32_t count, uint8_t sweep);
-
-/**
- * @brief LH2 sweeps come with an almost perfect 20ms difference.
- *        this function uses the timestamps to figure to which sweep-slot the new LH2 data belongs to.
- *
- * @param[in] lh2 pointer to the lh2 instance
- * @param[in] polynomial: index of found polynomia
- * @param[in] timestamp: timestamp of the SPI capture
- *
- */
-uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp);
-
 //=========================== public ===========================================
 
-bool db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
+bool db_lh2_capture_init(const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
 #if defined(BOARD_DOTBOT_V3)
     // DotBot-v3 has its own LH enable pin
@@ -256,23 +129,8 @@ bool db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
     _spi_setup(gpio_d);
 
-    // Setup the LH2 local variables
-    memset(_lh2_vars.spi_rx_buffer, 0, SPI_BUFFER_SIZE);
-    // initialize the spi ring buffer
-    memset(&_lh2_vars.data, 0, sizeof(lh2_ring_buffer_t));
-
-    // Setup LH2 data
-    lh2->spi_ring_buffer_count_ptr = &_lh2_vars.data.count;  // pointer to the size of the spi ring buffer,
-
-    for (uint8_t sweep = 0; sweep < LH2_SWEEP_COUNT; sweep++) {
-        for (uint8_t basestation = 0; basestation < LH2_BASESTATION_COUNT; basestation++) {
-            lh2->locations[sweep][basestation].lfsr_counts         = LH2_LOCATION_ERROR_INDICATOR;
-            lh2->locations[sweep][basestation].selected_polynomial = LH2_POLYNOMIAL_ERROR_INDICATOR;
-            lh2->timestamps[sweep][basestation]                    = 0;
-            lh2->data_ready[sweep][basestation]                    = DB_LH2_NO_NEW_DATA;
-        }
-    }
-    memset(_lh2_vars.data.buffer[0], 0, LH2_BUFFER_SIZE);
+    memset(_lh2_vars.spi_rx_buffer, 0, DB_LH2_CAPTURE_BYTES);
+    memset(&_lh2_vars.queue, 0, sizeof(_lh2_vars.queue));
 
     // initialize GPIOTEs
     _gpiote_setup(gpio_e);
@@ -283,180 +141,51 @@ bool db_lh2_init(db_lh2_t *lh2, const gpio_t *gpio_d, const gpio_t *gpio_e) {
     return true;
 }
 
-void db_lh2_start(void) {
-
+void db_lh2_capture_start(void) {
     NRF_PPI->TASKS_CHG[PPI_SPI_GROUP].EN = 1;
 }
 
-void db_lh2_stop(void) {
-
+void db_lh2_capture_stop(void) {
     NRF_PPI->TASKS_CHG[PPI_SPI_GROUP].DIS = 1;
 }
 
-void db_lh2_reset(db_lh2_t *lh2) {
-    // compute LFSR locations and detect invalid packets
-    for (uint8_t basestation = 0; basestation < LH2_BASESTATION_COUNT; basestation++) {
-        for (uint8_t sweep = 0; sweep < 2; sweep++) {
-
-            // Remove the flags indicating available data
-            lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
-            lh2->timestamps[sweep][basestation] = 0;
-            // We won't actually clear the data, it's not worth the computational effort.
-        }
-    }
-    // Drop any raw captures that were already queued, otherwise the next
-    // db_lh2_process_location() call would still consume pre-reset data.
+bool db_lh2_capture_pop(db_lh2_capture_t *out) {
+    // The SPIM interrupt pushes: keep it out while the queue is read
     NVIC_DisableIRQ(SPIM_IRQ);
-    _lh2_vars.data.read_index  = 0;
-    _lh2_vars.data.write_index = 0;
-    _lh2_vars.data.count       = 0;
+    bool popped = db_lh2_queue_pop(&_lh2_vars.queue, out);
+    NVIC_EnableIRQ(SPIM_IRQ);
+    return popped;
+}
+
+void db_lh2_capture_flush(void) {
+    NVIC_DisableIRQ(SPIM_IRQ);
+    db_lh2_queue_clear(&_lh2_vars.queue);
     NVIC_EnableIRQ(SPIM_IRQ);
 }
 
-void db_lh2_process_location(db_lh2_t *lh2) {
-    // There is no TS4231 data to process, return early.
-    if (_lh2_vars.data.count == 0) {
-        return;
-    }
-
-    //*********************************************************************************//
-    //                              Prepare Raw Data                                   //
-    //*********************************************************************************//
-
-    // Get value before it's overwritten by the ringbuffer.
-    uint8_t temp_spi_bits[SPI_BUFFER_SIZE * 2] = { 0 };  // The temp buffer has to be 128 long because _demodulate_light() expects it to be so
-                                                         // Making it smaller causes a hardfault
-                                                         // I don't know why, the SPI buffer is clearly 64bytes long.
-                                                         // should ask fil about this
-
-    // stop the interruptions while you're reading the data.
-    uint32_t temp_timestamp = 0;  // default timestamp
-    if (!_get_from_spi_ring_buffer(&_lh2_vars.data, temp_spi_bits, &temp_timestamp)) {
-        return;
-    }
-
-// Check if Qualysis Mocap data is interfering with the SPI capture
-#if defined(LH2_MOCAP_FILTER)
-    if (_check_mocap_interference(temp_spi_bits, SPI_BUFFER_SIZE)) {
-        return;  // if a qualysis pulse caused a false spi trigger, leave the function.
-    }
-#endif
-
-    // perform the demodulation received packets
-    // convert the SPI reading to bits via zero-crossing counter demodulation and differential/biphasic manchester decoding.
-    uint64_t temp_bits_sweep = _demodulate_light(temp_spi_bits);
-
-    // figure out which polynomial the data belongs  to
-    int8_t  temp_bit_offset          = 0;  // default offset
-    uint8_t temp_selected_polynomial = _determine_polynomial(temp_bits_sweep, &temp_bit_offset);
-
-    // If there was an error with the polynomial, leave without updating anything
-    if (temp_selected_polynomial == LH2_POLYNOMIAL_ERROR_INDICATOR) {
-        return;
-    }
-
-    // Figure out in which of the two sweep slots we should save the new data.
-    uint8_t sweep = _select_sweep(lh2, temp_selected_polynomial, temp_timestamp);
-
-    // Compute which basestation the sweep came from (polynomial 0,1 must map to LH0, 2,3 to LH1, etc... This can be accomplish by  integer-dividing the selected poly in 2, a shift >> accomplishes this.)
-    uint8_t basestation = temp_selected_polynomial >> 1;
-
-    //*********************************************************************************//
-    //                             Compute LFSR Position                               //
-    //*********************************************************************************//
-
-    // Select the valid bits of the lfsr by applying the offset (he first few bits might be invalid, as detected by _determine_polynomial())
-    uint32_t temp_lfsr_bits = temp_bits_sweep >> (47 - temp_bit_offset);
-
-    // Sanity check, make sure you don't start the LFSR search with a bit-sequence full of zeros.
-    if (temp_lfsr_bits == 0x000000) {
-        // Mark the data as wrong and keep going
-        lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
-        return;
-    }
-
-    // Compute the lfsr location.
-    uint32_t temp_lfsr_loc = _lfsr_index_search(&_lh2_vars.checkpoint,
-                                                temp_selected_polynomial,
-                                                temp_lfsr_bits);
-
-    // Check that the count didn't fall on an illegal value
-    if (temp_lfsr_loc != LH2_LFSR_SEARCH_ERROR_INDICATOR) {
-        // Save a new dynamic checkpoint
-        _update_lfsr_checkpoints(temp_selected_polynomial, temp_lfsr_bits, temp_lfsr_loc, sweep);
-    } else {
-        // Mark the data as wrong and keep going
-        lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
-        return;
-    }
-
-    // Undo the bit offset introduced above, to get the LFSR position of the first bit that hit the sensor.
-    temp_lfsr_loc -= temp_bit_offset;
-
-    // A count past a full rotation, or equal to the other sweep's, comes from a false polynomial match
-    if (temp_lfsr_loc > db_lh2_period(basestation) / DB_LH2_PERIOD_TICKS_PER_COUNT) {
-        lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
-        return;
-    }
-    uint8_t other_sweep = sweep ^ 1;
-    if (lh2->data_ready[other_sweep][basestation] == DB_LH2_PROCESSED_DATA_AVAILABLE && lh2->locations[other_sweep][basestation].lfsr_counts == temp_lfsr_loc) {
-        lh2->data_ready[sweep][basestation]       = DB_LH2_NO_NEW_DATA;
-        lh2->data_ready[other_sweep][basestation] = DB_LH2_NO_NEW_DATA;
-        return;
-    }
-
-    //*********************************************************************************//
-    //                                 Store results                                   //
-    //*********************************************************************************//
-
-    // Save raw data information
-    lh2->timestamps[sweep][basestation] = temp_timestamp;
-    // Save processed location information
-    lh2->locations[sweep][basestation].lfsr_counts         = temp_lfsr_loc;
-    lh2->locations[sweep][basestation].selected_polynomial = temp_selected_polynomial;
-    // Mark the data point as processed
-    lh2->data_ready[sweep][basestation] = DB_LH2_PROCESSED_DATA_AVAILABLE;
+uint32_t db_lh2_capture_dropped(void) {
+    return _lh2_vars.queue.dropped;
 }
 
-void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basestation_index, double *coordinates) {
-    if (basestation_index >= LH2_BASESTATION_COUNT) {
-        coordinates[0] = NAN;
-        coordinates[1] = NAN;
-        return;
-    }
-    double cam[2];
-    db_lh2_camera_point(count1, count2, (uint8_t)basestation_index, cam);
-    double cam_x = cam[0];
-    double cam_y = cam[1];
-
-    double x_position = homography_matrix[basestation_index][0][0] * cam_x + homography_matrix[basestation_index][0][1] * cam_y + homography_matrix[basestation_index][0][2];
-    double y_position = homography_matrix[basestation_index][1][0] * cam_x + homography_matrix[basestation_index][1][1] * cam_y + homography_matrix[basestation_index][1][2];
-    double scale      = homography_matrix[basestation_index][2][0] * cam_x + homography_matrix[basestation_index][2][1] * cam_y + homography_matrix[basestation_index][2][2];
-
-    coordinates[0] = x_position / scale;
-    coordinates[1] = y_position / scale;
+uint32_t db_lh2_capture_now_us(void) {
+    return db_timer_hf_now(LH2_TIMER_DEV);
 }
 
-void db_lh2_store_homography(db_lh2_t *lh2, uint8_t basestation_index, float homography_matrix_from_packet[3][3]) {
-    if (basestation_index >= LH2_BASESTATION_COUNT) {
-        return;
-    }
-    for (uint8_t i = 0; i < 3; i++) {
-        for (uint8_t j = 0; j < 3; j++) {
-            homography_matrix[basestation_index][i][j] = (double)homography_matrix_from_packet[i][j];
-        }
-    }
-
-    lh2->lh2_calibration_complete[basestation_index] = true;
+void db_lh2_handle_isr(void) {
+    uint32_t timestamp = db_timer_hf_now(LH2_TIMER_DEV);
+    // Queue the capture before re-arming: the next envelope edge restarts the
+    // SPIM DMA into spi_rx_buffer
+    db_lh2_queue_push(&_lh2_vars.queue, _lh2_vars.spi_rx_buffer, timestamp);
+    db_lh2_capture_start();
 }
+
+//=========================== private ==========================================
 
 #define TS4231_INIT_SAMPLES_LEN 14
-const uint8_t expected_init_sequence[TS4231_INIT_SAMPLES_LEN] = {
+static const uint8_t expected_init_sequence[TS4231_INIT_SAMPLES_LEN] = {
     0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00,
     0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x01
 };
-
-//=========================== private ==========================================
 
 bool _initialize_ts4231(const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
@@ -658,8 +387,8 @@ void _spi_setup(const gpio_t *gpio_d) {
                          _lh2_spi_fake_sck_gpio.port << SPIM_PSEL_SCK_PORT_Pos |        // Define pin port for SCK pin
                          SPIM_PSEL_SCK_CONNECT_Connected << SPIM_PSEL_SCK_CONNECT_Pos;  // Enable the SCK pin
 
-    NRF_SPIM->PSEL.MOSI = (4UL) << SPIM_PSEL_MOSI_PIN_Pos |
-                          1 << SPIM_PSEL_MOSI_PORT_Pos |
+    NRF_SPIM->PSEL.MOSI = _lh2_spi_fake_mosi_gpio.pin << SPIM_PSEL_MOSI_PIN_Pos |
+                          _lh2_spi_fake_mosi_gpio.port << SPIM_PSEL_MOSI_PORT_Pos |
                           SPIM_PSEL_MOSI_CONNECT_Connected << SPIM_PSEL_MOSI_CONNECT_Pos;
 
     // Configure the Interruptions
@@ -671,7 +400,7 @@ void _spi_setup(const gpio_t *gpio_d) {
     NRF_SPIM->CONFIG    = SPIM_CONFIG_ORDER_MsbFirst << SPIM_CONFIG_ORDER_Pos;  // Set MsB out first
 
     // Configure the EasyDMA channel, only using RX
-    NRF_SPIM->RXD.MAXCNT = SPI_BUFFER_SIZE;                    // Set the size of the input buffer.
+    NRF_SPIM->RXD.MAXCNT = DB_LH2_CAPTURE_BYTES;               // Set the size of the input buffer.
     NRF_SPIM->RXD.PTR    = (uint32_t)_lh2_vars.spi_rx_buffer;  // Set the input buffer pointer.
 
     NRF_SPIM->INTENSET = SPIM_INTENSET_END_Enabled << SPIM_INTENSET_END_Pos;  // Enable interruption for when a packet arrives
@@ -681,147 +410,6 @@ void _spi_setup(const gpio_t *gpio_d) {
 
     // Enable the SPIM peripheral
     NRF_SPIM->ENABLE = SPIM_ENABLE_ENABLE_Enabled << SPIM_ENABLE_ENABLE_Pos;
-}
-
-void _add_to_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t timestamp) {
-
-    memcpy(cb->buffer[cb->write_index], data, SPI_BUFFER_SIZE);
-    cb->timestamps[cb->write_index] = timestamp;
-    cb->write_index                 = (cb->write_index + 1) % LH2_BUFFER_SIZE;
-
-    if (cb->count < LH2_BUFFER_SIZE) {
-        cb->count++;
-    } else {
-        // Overwrite oldest data, adjust read_index
-        cb->read_index = (cb->read_index + 1) % LH2_BUFFER_SIZE;
-    }
-}
-
-bool _get_from_spi_ring_buffer(lh2_ring_buffer_t *cb, uint8_t *data, uint32_t *timestamp) {
-    // Mask the SPIM interrupt while touching shared ring-buffer state so the
-    // writer (db_lh2_handle_isr) cannot preempt mid-read and corrupt count /
-    // read_index.
-    NVIC_DisableIRQ(SPIM_IRQ);
-    if (cb->count == 0) {
-        // Buffer is empty
-        NVIC_EnableIRQ(SPIM_IRQ);
-        return false;
-    }
-
-    memcpy(data, cb->buffer[cb->read_index], SPI_BUFFER_SIZE);
-    *timestamp     = cb->timestamps[cb->read_index];
-    cb->read_index = (cb->read_index + 1) % LH2_BUFFER_SIZE;
-    cb->count--;
-    NVIC_EnableIRQ(SPIM_IRQ);
-
-    return true;
-}
-void _update_lfsr_checkpoints(uint8_t polynomial, uint32_t bits, uint32_t count, uint8_t sweep) {
-
-    // Save the new count in the correct place in the checkpoint array
-    _lh2_vars.checkpoint.bits[polynomial][sweep]  = bits;
-    _lh2_vars.checkpoint.count[polynomial][sweep] = count;
-}
-
-uint8_t _select_sweep(db_lh2_t *lh2, uint8_t polynomial, uint32_t timestamp) {
-    // TODO: check the exact, per-mode period of each polynomial instead of using a blanket 20ms
-
-    uint8_t  basestation  = polynomial >> 1;  ///< each base station uses 2 polynomials. integer dividing by 2 maps the polynomial number to the basestation number.
-    uint16_t sweep_period = _lh2_sweep_period_us[basestation];
-    uint32_t now          = db_timer_hf_now(LH2_TIMER_DEV);
-
-    for (size_t sweep = 0; sweep < 2; sweep++) {
-        if (now - lh2->timestamps[sweep][basestation] > LH2_MAX_DATA_VALID_TIME_US) {
-            // Remove data that is too old.
-            lh2->timestamps[sweep][basestation] = 0;
-            lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
-            // I don't think it's worth it to remove the location data. It is already marked as "No new data"
-        }
-    }
-
-    ///< Encode in two bits which sweep slot of this basestation is empty, (1 means data, 0 means empty)
-    uint8_t sweep_slot_state = ((lh2->timestamps[1][basestation] != 0) << 1) | (lh2->timestamps[0][basestation] != 0);
-    // by default, select the first slot
-    uint8_t selected_sweep = 0;
-
-    switch (sweep_slot_state) {
-
-        case LH2_SWEEP_BOTH_SLOTS_EMPTY:
-        {
-            // use the first slot
-            selected_sweep = 0;
-            break;
-        }
-
-        case LH2_SWEEP_FIRST_SLOT_EMPTY:
-        {
-            // check that the filled slot is not a perfect 20ms match to the new data.
-            uint32_t diff = (timestamp - lh2->timestamps[1][basestation]) % sweep_period;
-            diff          = diff < sweep_period - diff ? diff : sweep_period - diff;
-
-            if (diff < LH2_SWEEP_PERIOD_THRESHOLD_US) {
-                // match: use filled slot
-                selected_sweep = 1;
-            } else {
-                // no match: use empty slot
-                selected_sweep = 0;
-            }
-            break;
-        }
-
-        case LH2_SWEEP_SECOND_SLOT_EMPTY:
-        {
-            // check that the filled slot is not a perfect 20ms match to the new data.
-            uint32_t diff = (timestamp - lh2->timestamps[0][basestation]) % sweep_period;
-            diff          = diff < sweep_period - diff ? diff : sweep_period - diff;
-
-            if (diff < LH2_SWEEP_PERIOD_THRESHOLD_US) {
-                // match: use filled slot
-                selected_sweep = 0;
-            } else {
-                // no match: use empty slot
-                selected_sweep = 1;
-            }
-            break;
-        }
-
-        case LH2_SWEEP_BOTH_SLOTS_FULL:
-        {
-            // How far away is this new pulse from the already stored data
-            int64_t diff_0 = ((timestamp - lh2->timestamps[0][basestation]) % sweep_period);
-            diff_0         = diff_0 < sweep_period - diff_0 ? diff_0 : sweep_period - diff_0;
-            int64_t diff_1 = ((timestamp - lh2->timestamps[1][basestation]) % sweep_period);
-            diff_1         = diff_1 < sweep_period - diff_1 ? diff_1 : sweep_period - diff_1;
-
-            // Use the one that is closest to 20ms
-            if (diff_0 <= diff_1) {
-                selected_sweep = 0;
-            } else {
-                selected_sweep = 1;
-            }
-            break;
-        }
-
-        default:
-        {
-            // By default, use he first slot
-            selected_sweep = 0;
-            break;
-        }
-    }
-
-    return selected_sweep;
-}
-
-void db_lh2_handle_isr(void) {
-    // Read the current time.
-    uint32_t timestamp = db_timer_hf_now(LH2_TIMER_DEV);
-    // Copy the just-completed capture into the ring buffer before re-arming
-    // the PPI. Otherwise the next envelope edge can restart the SPIM DMA and
-    // overwrite spi_rx_buffer while we are still reading from it.
-    _add_to_spi_ring_buffer(&_lh2_vars.data, _lh2_vars.spi_rx_buffer, timestamp);
-    // Reenable the PPI channel
-    db_lh2_start();
 }
 
 //=========================== interrupts =======================================
