@@ -64,6 +64,13 @@ _Static_assert(offsetof(db_lh2_floor_line_t, sweep) == 17, "db_lh2_floor_line_t 
 uint32_t db_lh2_period(uint8_t station);
 
 /**
+ * @brief   Rotor period of a station, in microseconds: db_lh2_period() at 48 MHz, rounded
+ *
+ * @param[in]   station     lh_index; 0 when out of range
+ */
+uint32_t db_lh2_period_us(uint8_t station);
+
+/**
  * @brief   Pinhole image point of one sweep pair
  *
  * @param[in]   count1      sweep 0 LFSR count
@@ -72,6 +79,17 @@ uint32_t db_lh2_period(uint8_t station);
  * @param[out]  cam         image point (x, y)
  */
 void db_lh2_camera_point(uint32_t count1, uint32_t count2, uint8_t station, double cam[2]);
+
+/**
+ * @brief   Floor position of one sweep pair: the camera point through the station's homography
+ *
+ * @param[in]   count1      sweep 0 LFSR count
+ * @param[in]   count2      sweep 1 LFSR count
+ * @param[in]   station     lh_index; NaN out when out of range
+ * @param[in]   homography  camera point to frame mm, evaluated in double
+ * @param[out]  xy_mm       (x, y) in mm; NaN or inf when the homography maps the point to infinity
+ */
+void db_lh2_solve(uint32_t count1, uint32_t count2, uint8_t station, const float homography[3][3], double xy_mm[2]);
 
 /**
  * @brief   Both sweeps of one pair as floor lines

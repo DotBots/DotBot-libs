@@ -5,9 +5,11 @@
  * @copyright Inria, 2026
  */
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "lh2_geometry.h"
 
@@ -63,6 +65,33 @@ static void _reference_camera_point(uint32_t count1, uint32_t count2, uint32_t b
     cam_y *= sqrt(1 + cam_x * cam_x);
     cam[0] = cam_x;
     cam[1] = cam_y;
+}
+
+/// Reference copy of the period table the BSP's sweep-slot rule used, in us
+static const uint16_t _reference_periods_us[16] = {
+    19979, 19938, 19854, 19771, 19729, 19646, 19604, 19563,
+    19521, 19354, 19146, 18979, 18896, 18771, 18604, 18479
+};
+
+/// Reference copy of the BSP's solve: the homography stored as double, then applied to the camera point
+static void _reference_solve(uint32_t count1, uint32_t count2, uint32_t basestation_index, const float h_float[3][3], double *coordinates) {
+    double homography_matrix[3][3];
+    for (uint8_t i = 0; i < 3; i++) {
+        for (uint8_t j = 0; j < 3; j++) {
+            homography_matrix[i][j] = (double)h_float[i][j];
+        }
+    }
+    double cam[2];
+    db_lh2_camera_point(count1, count2, (uint8_t)basestation_index, cam);
+    double cam_x = cam[0];
+    double cam_y = cam[1];
+
+    double x_position = homography_matrix[0][0] * cam_x + homography_matrix[0][1] * cam_y + homography_matrix[0][2];
+    double y_position = homography_matrix[1][0] * cam_x + homography_matrix[1][1] * cam_y + homography_matrix[1][2];
+    double scale      = homography_matrix[2][0] * cam_x + homography_matrix[2][1] * cam_y + homography_matrix[2][2];
+
+    coordinates[0] = x_position / scale;
+    coordinates[1] = y_position / scale;
 }
 
 //=========================== helpers ==========================================
@@ -266,6 +295,46 @@ static void test_degenerate(void) {
     CHECK(n == 0 || (isfinite(lines[0].d_mm) && isfinite(lines[1].d_mm)), "an azimuth at 90 deg is degenerate or finite, never NaN out");
 }
 
+static void test_period_us(void) {
+    int mismatches = 0;
+    for (uint8_t station = 0; station < 16; station++) {
+        if (db_lh2_period_us(station) != _reference_periods_us[station]) {
+            mismatches++;
+        }
+    }
+    CHECK(mismatches == 0, "period in us equal to the BSP's table: %d of 16 differ", mismatches);
+    CHECK(db_lh2_period_us(16) == 0, "period in us out of range: %u", db_lh2_period_us(16));
+}
+
+static bool _same(double a, double b) {
+    return memcmp(&a, &b, sizeof(a)) == 0;
+}
+
+static void test_solve_parity(void) {
+    int mismatches = 0;
+    for (int i = 0; i < 20000; i++) {
+        uint8_t  station = (uint8_t)(i % 16);
+        uint32_t c1, c2;
+        float    h[3][3];
+        _random_counts(station, &c1, &c2);
+        _random_homography(h);
+        if (i % 50 == 0) {
+            h[2][0] = h[2][1] = h[2][2] = 0.0f;  // the point at infinity
+        }
+        double got[2], want[2];
+        db_lh2_solve(c1, c2, station, (const float(*)[3])h, got);
+        _reference_solve(c1, c2, station, (const float(*)[3])h, want);
+        if (!_same(got[0], want[0]) || !_same(got[1], want[1])) {
+            mismatches++;
+        }
+    }
+    CHECK(mismatches == 0, "solve bit-identical to the BSP's double-homography copy: %d of 20000 differ", mismatches);
+    float  ok[3][3] = { { 1500, 0, 2000 }, { 0, 1500, 2000 }, { 0, 0, 1 } };
+    double xy[2];
+    db_lh2_solve(1000, 2000, 16, (const float(*)[3])ok, xy);
+    CHECK(isnan(xy[0]) && isnan(xy[1]), "solve for station 16 gives NaN: got (%f, %f)", xy[0], xy[1]);
+}
+
 int main(void) {
     test_camera_point_parity();
     test_camera_point_out_of_range();
@@ -274,6 +343,8 @@ int main(void) {
     test_variance_from_sweep_sigma();
     test_typical_variance();
     test_degenerate();
+    test_period_us();
+    test_solve_parity();
     printf("lh2_geometry: %d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -115,6 +115,10 @@ uint32_t db_lh2_period(uint8_t station) {
     return (station < DB_LH2_GEOMETRY_STATIONS) ? _periods[station] : 0;
 }
 
+uint32_t db_lh2_period_us(uint8_t station) {
+    return (station < DB_LH2_GEOMETRY_STATIONS) ? (_periods[station] + 24U) / 48U : 0;
+}
+
 void db_lh2_camera_point(uint32_t count1, uint32_t count2, uint8_t station, double cam[2]) {
     if (station >= DB_LH2_GEOMETRY_STATIONS) {
         cam[0] = NAN;
@@ -137,6 +141,25 @@ void db_lh2_camera_point(uint32_t count1, uint32_t count2, uint8_t station, doub
 
     cam[0] = cam_x;
     cam[1] = cam_y;
+}
+
+void db_lh2_solve(uint32_t count1, uint32_t count2, uint8_t station, const float homography[3][3], double xy_mm[2]) {
+    if (station >= DB_LH2_GEOMETRY_STATIONS) {
+        xy_mm[0] = NAN;
+        xy_mm[1] = NAN;
+        return;
+    }
+    double cam[2];
+    db_lh2_camera_point(count1, count2, station, cam);
+    double cam_x = cam[0];
+    double cam_y = cam[1];
+
+    double x     = (double)homography[0][0] * cam_x + (double)homography[0][1] * cam_y + (double)homography[0][2];
+    double y     = (double)homography[1][0] * cam_x + (double)homography[1][1] * cam_y + (double)homography[1][2];
+    double scale = (double)homography[2][0] * cam_x + (double)homography[2][1] * cam_y + (double)homography[2][2];
+
+    xy_mm[0] = x / scale;
+    xy_mm[1] = y / scale;
 }
 
 uint8_t db_lh2_sweep_lines(uint32_t count1, uint32_t count2, uint8_t station, const float homography[3][3], db_lh2_floor_line_t out[2]) {
