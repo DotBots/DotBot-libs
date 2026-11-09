@@ -744,22 +744,31 @@ static void test_fix_from_every_station_before_heading(void) {
     CHECK(step <= 1.0f && hypotf(ox, oy) <= 1.0f, "no heading, one station: its intersection, (%.1f, %.1f) mm off, step %.1f", ox, oy, step);
 }
 
-static void test_fix_falls_back_without_a_crossing(void) {
-    sim_t s;
-    _sim_init(&s, 0);
+/// Runs a robot at rest with no heading, staging with each new fix two
+/// near-parallel lines through the input's solve moved by off_mm along x
+static void _near_parallel(sim_t *s, float off_mm) {
+    _sim_init(s, 0);
     for (uint32_t i = 0; i < 20; i++) {
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
-        if (s.plant.tick % PLANT_FIX_EVERY == 0) {
+        _plant_step(&s->plant, &in);
+        if (s->plant.tick % PLANT_FIX_EVERY == 0) {
+            float               x = (float)in.fix_x + off_mm, y = (float)in.fix_y;
             db_lh2_floor_line_t lines[2] = {
-                { .nx = 1, .ny = 0, .d_mm = 500, .var_mm2 = 1, .station = 0, .sweep = 0 },
-                { .nx = 1, .ny = 0.01f, .d_mm = 520, .var_mm2 = 1, .station = 1, .sweep = 0 },
+                { .nx = 1, .ny = 0, .d_mm = x, .var_mm2 = 1, .station = 0, .sweep = 0 },
+                { .nx = 1, .ny = 0.01f, .d_mm = x + 0.01f * y, .var_mm2 = 1, .station = 1, .sweep = 0 },
             };
-            db_control_lines(&s.control, lines, 2);
+            db_control_lines(&s->control, lines, 2);
         }
-        db_control_tick(&s.control, &in, &s.out);
+        db_control_tick(&s->control, &in, &s->out);
     }
+}
+
+static void test_fix_falls_back_without_a_crossing(void) {
+    sim_t s;
+    _near_parallel(&s, 0);
     CHECK(s.control.has_position && s.control.position_x == s.plant.fix_x && s.control.position_y == s.plant.fix_y, "near-parallel lines: the input's solve is the fix, (%u, %u)", s.control.position_x, s.control.position_y);
+    _near_parallel(&s, 20.0f);
+    CHECK(!s.control.has_position && !s.control.last_fusion.fix_valid, "near-parallel lines 20 mm off the input's solve: no fix");
 }
 
 static void test_fix_leaves_out_a_rejected_station(void) {
@@ -798,9 +807,10 @@ static void test_fusion_record_before_heading_and_on_fallback(void) {
         db_control_input_t in;
         _plant_step(&s.plant, &in);
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
+            float               x = (float)in.fix_x, y = (float)in.fix_y;
             db_lh2_floor_line_t lines[2] = {
-                { .nx = 1, .ny = 0, .d_mm = 500, .var_mm2 = 1, .station = 0, .sweep = 0 },
-                { .nx = 1, .ny = 0.01f, .d_mm = 520, .var_mm2 = 1, .station = 5, .sweep = 1 },
+                { .nx = 1, .ny = 0, .d_mm = x, .var_mm2 = 1, .station = 0, .sweep = 0 },
+                { .nx = 1, .ny = 0.01f, .d_mm = x + 0.01f * y, .var_mm2 = 1, .station = 5, .sweep = 1 },
             };
             db_control_lines(&s.control, lines, 2);
         }
@@ -913,6 +923,101 @@ static void test_station_back_on_air_settles(void) {
     CHECK(fused > 0, "back after 300 ms: not an absence, %u lines fused", fused);
 }
 
+/// A robot at rest where station 1's sweep 0 line is 20 mm off along its
+/// normal on a random 57 % of reads, the photodiode moved by (dx, dy), and
+/// station 0 in a read with probability both_pct %, and absent for the first
+/// 6 of every drop_every reads when that is set; the input's solve is
+/// station 1's pair. Returns the advertised photodiode's largest distance from
+/// the truth over the fixes after the first skip ones.
+static float _bimodal_at_rest(sim_t *s, uint32_t fixes, uint32_t skip, uint32_t both_pct, uint32_t drop_every, float dx, float dy) {
+    float worst = 0;
+    for (uint32_t n = 0; n < fixes;) {
+        db_control_input_t in;
+        _plant_step(&s->plant, &in);
+        bool  fix = s->plant.tick % PLANT_FIX_EVERY == 0;
+        float tx  = s->plant.px[PLANT_FIX_AGE] + dx;
+        float ty  = s->plant.py[PLANT_FIX_AGE] + dy;
+        if (fix) {
+            db_lh2_floor_line_t lines[4];
+            _cross(tx, ty, 20.0f, 0, &lines[0]);
+            _cross(tx, ty, 65.0f, 1, &lines[2]);
+            for (unsigned i = 0; i < 4; i++) {
+                lines[i].var_mm2 = 4;
+                lines[i].d_mm += _gauss(&s->plant);
+            }
+            if (_uniform(&s->plant) < 0.57f) {
+                lines[2].d_mm += 20.0f;
+            }
+            bool  both = _uniform(&s->plant) * 100.0f < (float)both_pct && !(drop_every && n % drop_every < 6);
+            float sx = tx, sy = ty;
+            db_lh2_fusion_intersect(&lines[2], 2, &sx, &sy);
+            in.fix_x = (uint32_t)lroundf(sx);
+            in.fix_y = (uint32_t)lroundf(sy);
+            db_control_lines(&s->control, both ? lines : &lines[2], both ? 4 : 2);
+        }
+        db_control_tick(&s->control, &in, &s->out);
+        if (fix) {
+            db_control_report_t report;
+            db_control_report(&s->control, &report);
+            if (n++ >= skip) {
+                worst = fmaxf(worst, hypotf((float)report.sensor_x - tx, (float)report.sensor_y - ty));
+            }
+        }
+    }
+    return worst;
+}
+
+static void test_bimodal_line_keeps_tracking(void) {
+    // On a read with station 1 alone, its good sweep is accepted and the bad
+    // one rejected: one line fixes no point, and the solve is the bad one
+    sim_t s;
+    _sim_init(&s, 1);
+    s.plant.noise_mm               = 0;
+    float                      off = _bimodal_at_rest(&s, 1000, 0, 70, 0, 0, 0);
+    const db_pose_estimator_t *est = &s.control.estimator;
+    CHECK(est->status == DB_POSE_ESTIMATOR_TRACKING && est->kidnaps == 0, "bimodal line, tracking: still tracking over 1000 fixes, %u kidnaps, status %u", est->kidnaps, est->status);
+    CHECK(off <= 1.5f, "bimodal line, tracking: the advertised photodiode within 1.5 mm, %.1f mm off", off);
+}
+
+static void test_bimodal_line_untracked_holds_still(void) {
+    // Never driven, so never tracking: the advertisement is each read's fix
+    sim_t s;
+    _sim_init(&s, 0);
+    s.plant.noise_mm = 0;
+    float off        = _bimodal_at_rest(&s, 1000, 10, 90, 0, 0, 0);
+    CHECK(s.control.estimator.status != DB_POSE_ESTIMATOR_TRACKING, "bimodal line, untracked: never tracks at rest");
+    CHECK(off <= 5.0f, "bimodal line, untracked: the advertised photodiode within 5 mm after the first second, %.1f mm off", off);
+
+    // As on the bench: station 0 off air for 0.6 s every 6 s, then settling
+    _sim_init(&s, 0);
+    s.plant.noise_mm = 0;
+    off              = _bimodal_at_rest(&s, 1000, 10, 100, 60, 0, 0);
+    CHECK(off <= 5.0f, "bimodal line, untracked, station 0 dropping out: within 5 mm through its settling, %.1f mm off", off);
+}
+
+static void test_untracked_at_rest_follows_a_move_by_hand(void) {
+    // Carried, wheels still, to where station 1 alone is in view: its fixes
+    // are taken once the last checked fix is old enough
+    sim_t s;
+    _sim_init(&s, 0);
+    s.plant.noise_mm = 0;
+    _bimodal_at_rest(&s, 100, 0, 100, 0, 0, 0);
+    _bimodal_at_rest(&s, 50, 0, 0, 0, 300.0f, -200.0f);
+    float tx = s.plant.px[PLANT_FIX_AGE] + 300.0f, ty = s.plant.py[PLANT_FIX_AGE] - 200.0f;
+    float d = hypotf((float)s.control.position_x - tx, (float)s.control.position_y - ty);
+    CHECK(d < 25.0f, "untracked, moved 360 mm by hand: the fix follows within 5 s, %.1f mm off", d);
+}
+
+static void test_bimodal_line_still_sees_a_kidnap(void) {
+    sim_t s;
+    _sim_init(&s, 1);
+    s.plant.noise_mm = 0;
+    _bimodal_at_rest(&s, 200, 0, 70, 0, 0, 0);
+    _bimodal_at_rest(&s, 20, 0, 70, 0, 300.0f, -200.0f);
+    const db_pose_estimator_t *est = &s.control.estimator;
+    CHECK(est->kidnaps == 1 && est->status == DB_POSE_ESTIMATOR_SEEDING, "bimodal line, moved 360 mm: the kidnap is seen within 2 s, %u kidnaps, status %u", est->kidnaps, est->status);
+}
+
 int main(void) {
     test_batch_seeded();
     test_seed();
@@ -937,6 +1042,10 @@ int main(void) {
     test_fusion_record_before_heading_and_on_fallback();
     test_station_dark_at_rest_keeps_the_heading();
     test_station_back_on_air_settles();
+    test_bimodal_line_keeps_tracking();
+    test_bimodal_line_untracked_holds_still();
+    test_bimodal_line_still_sees_a_kidnap();
+    test_untracked_at_rest_follows_a_move_by_hand();
     printf("dotbot_control: %d passed, %d failed\n", _passed, _failed);
     return _failed ? 1 : 0;
 }

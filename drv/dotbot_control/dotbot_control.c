@@ -264,6 +264,18 @@ static bool _station_settling(db_control_t *control, uint8_t station, uint32_t t
     return back != 0 && tick - back < DB_CONTROL_STATION_SETTLE_TICKS;
 }
 
+/// The point lies within the fusion gate of every well-formed line
+static bool _on_every_line(const db_lh2_floor_line_t *lines, uint8_t count, float x_mm, float y_mm) {
+    for (uint8_t i = 0; i < count; i++) {
+        const db_lh2_floor_line_t *l = &lines[i];
+        float                      r = l->nx * x_mm + l->ny * y_mm - l->d_mm;
+        if (isfinite(r) && l->var_mm2 > 0 && r * r > DB_LH2_FUSION_GATE * l->var_mm2) {
+            return false;
+        }
+    }
+    return true;
+}
+
 //=========================== public ===========================================
 
 void db_control_init(db_control_t *control, const db_control_conf_t *conf) {
@@ -409,8 +421,7 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
     db_lh2_floor_line_t         fix_lines[DB_CONTROL_LINES_MAX];
     uint8_t                     fix_line_count = 0;
     bool                        tracking       = control->estimator.status == DB_POSE_ESTIMATOR_TRACKING;
-    uint8_t                     fused          = 0;
-    bool                        any_rejected   = false;
+    bool                        far_rejected   = false;
     db_control_fusion_record_t *record         = &control->last_fusion;
     if (control->line_count > 0) {
         record->count = control->line_count;
@@ -422,27 +433,47 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
             record->innovation_mm[i] = NAN;
             continue;
         }
-        fused++;
         control->estimator.last_innovation_mm = NAN;
         db_pose_estimator_result_t result     = db_lh2_fusion_update(&control->fusion, &control->estimator, &control->lines[i]);
         record->result[i]                     = (uint8_t)result;
         record->innovation_mm[i]              = control->estimator.last_innovation_mm;
-        if (result != DB_POSE_ESTIMATOR_ACCEPTED) {
-            any_rejected = true;
+        if (result != DB_POSE_ESTIMATOR_ACCEPTED && fabsf(control->estimator.last_innovation_mm) > DB_CONTROL_LINE_KIDNAP_MM) {
+            far_rejected = true;
         }
         if (!tracking || result == DB_POSE_ESTIMATOR_ACCEPTED) {
             fix_lines[fix_line_count++] = control->lines[i];
         }
     }
-    bool  lines_accepted = fused > 0 && !any_rejected;
-    float fix_x;
-    float fix_y;
-    bool  fix_valid      = db_lh2_fusion_intersect(fix_lines, fix_line_count, &fix_x, &fix_y) && fix_x >= 0 && fix_y >= 0 && fix_x <= POSITION_INVALID_MM && fix_y <= POSITION_INVALID_MM;
-    bool  fix_from_lines = fix_valid;
-    if (!fix_valid && in->fix_x <= POSITION_INVALID_MM && in->fix_y <= POSITION_INVALID_MM) {
-        fix_x     = (float)in->fix_x;
-        fix_y     = (float)in->fix_y;
-        fix_valid = true;
+    // While tracking, a line the gate took confirms the pose, and the others
+    // are bad sweeps unless one is far enough off to be a kidnap; a solve then
+    // includes those sweeps, so it is not used
+    bool    lines_accepted = tracking && fix_line_count > 0 && !far_rejected;
+    float   fix_x;
+    float   fix_y;
+    uint8_t fix_rests_on = 0;
+    if (tracking) {
+        fix_rests_on = db_lh2_fusion_intersect(fix_lines, fix_line_count, &fix_x, &fix_y) ? fix_line_count : 0;
+    } else {
+        fix_rests_on = db_lh2_fusion_consensus(fix_lines, fix_line_count, &fix_x, &fix_y);
+    }
+    bool fix_valid      = fix_rests_on > 0 && fix_x >= 0 && fix_y >= 0 && fix_x <= POSITION_INVALID_MM && fix_y <= POSITION_INVALID_MM;
+    bool fix_from_lines = fix_valid;
+    if (!fix_valid && !lines_accepted && in->fix_x <= POSITION_INVALID_MM && in->fix_y <= POSITION_INVALID_MM && (tracking || _on_every_line(fix_lines, fix_line_count, (float)in->fix_x, (float)in->fix_y))) {
+        fix_x        = (float)in->fix_x;
+        fix_y        = (float)in->fix_y;
+        fix_valid    = true;
+        fix_rests_on = 0;
+    }
+    // At rest, a fix no third line checks, as one station's is, waits for one that is
+    if (in->counts_left != 0 || in->counts_right != 0) {
+        control->checked_fix_tick = 0;
+    }
+    if (!tracking && fix_valid) {
+        if (fix_from_lines && fix_rests_on >= 3) {
+            control->checked_fix_tick = tick;
+        } else if (control->checked_fix_tick != 0 && tick - control->checked_fix_tick <= DB_CONTROL_CHECKED_FIX_TICKS) {
+            fix_valid = false;
+        }
     }
     if (control->line_count > 0) {
         record->fix_valid      = fix_valid;

@@ -587,6 +587,54 @@ static void test_intersect_needs_a_crossing(void) {
     CHECK(!db_lh2_fusion_intersect(bad, 2, &x, &y) && x == -1, "a zero-variance line is skipped, leaving one, and the outputs are untouched");
 }
 
+//=========================== tests: consensus =================================
+
+/// Two lines through (x, y) crossing at 90 deg, normals turned by angle_deg, var 4
+static void _cross(float x, float y, float angle_deg, db_lh2_floor_line_t out[2]) {
+    float a = angle_deg * (float)M_PI / 180.0f;
+    float c = cosf(a), s = sinf(a);
+    out[0] = (db_lh2_floor_line_t){ .nx = c, .ny = s, .d_mm = c * x + s * y, .var_mm2 = 4 };
+    out[1] = (db_lh2_floor_line_t){ .nx = -s, .ny = c, .d_mm = -s * x + c * y, .var_mm2 = 4 };
+}
+
+static void test_consensus_of_agreeing_lines_is_their_intersection(void) {
+    db_lh2_floor_line_t lines[4];
+    _cross(500, 600, 20, &lines[0]);
+    _cross(502, 599, 65, &lines[2]);
+    float x, y, xi, yi;
+    CHECK(db_lh2_fusion_intersect(lines, 4, &xi, &yi), "agreeing: the lines cross");
+    CHECK(db_lh2_fusion_consensus(lines, 4, &x, &y) == 4 && x == xi && y == yi, "agreeing: every line kept, the plain intersection, (%.2f, %.2f)", x, y);
+    CHECK(db_lh2_fusion_consensus(lines, 2, &x, &y) == 2 && fabsf(x - 500) < 1e-3f && fabsf(y - 600) < 1e-3f, "two lines: nothing to check them against, their crossing");
+}
+
+static void test_consensus_leaves_out_a_bad_sweep(void) {
+    // Station 1's sweep 0 20 mm off, as at the bench spot where it is bimodal
+    db_lh2_floor_line_t lines[4];
+    _cross(500, 600, 20, &lines[0]);
+    _cross(500, 600, 65, &lines[2]);
+    lines[2].d_mm += 20;
+    float x, y;
+    CHECK(db_lh2_fusion_intersect(lines, 4, &x, &y) && hypotf(x - 500, y - 600) > 5, "bad sweep: the plain intersection is pulled %.1f mm", hypotf(x - 500, y - 600));
+    CHECK(db_lh2_fusion_consensus(lines, 4, &x, &y) == 3 && hypotf(x - 500, y - 600) < 1e-2f, "bad sweep: left out, the others' point, (%.2f, %.2f)", x, y);
+    // Any line may be the bad one, and a malformed line is no line
+    lines[2].d_mm -= 20;
+    lines[1].d_mm -= 20;
+    db_lh2_floor_line_t mixed[5] = { lines[0], lines[1], { .nx = NAN, .ny = 1, .d_mm = 0, .var_mm2 = 1 }, lines[2], lines[3] };
+    CHECK(db_lh2_fusion_consensus(mixed, 5, &x, &y) == 3 && hypotf(x - 500, y - 600) < 1e-2f, "bad sweep of station 0, beside a malformed line: left out, (%.2f, %.2f)", x, y);
+}
+
+static void test_consensus_fails_when_it_cannot_tell(void) {
+    db_lh2_floor_line_t lines[4];
+    _cross(500, 600, 20, &lines[0]);
+    _cross(500, 600, 65, &lines[2]);
+    lines[2].d_mm += 20;
+    float x = -1, y = -1;
+    CHECK(db_lh2_fusion_consensus(lines, 3, &x, &y) == 0 && x == -1 && y == -1, "three lines, one off: any two agree, so no point, outputs untouched");
+    lines[0].d_mm -= 20;
+    CHECK(db_lh2_fusion_consensus(lines, 4, &x, &y) == 0 && x == -1, "four lines, two off: no three agree, so no point");
+    CHECK(db_lh2_fusion_consensus(lines, 1, &x, &y) == 0 && x == -1, "one line: no point");
+}
+
 int main(void) {
     test_update_line_needs_tracking();
     test_update_line_moves_along_normal();
@@ -606,6 +654,9 @@ int main(void) {
     test_intersect_two_stations_between_their_solves();
     test_intersect_weights_by_variance();
     test_intersect_needs_a_crossing();
+    test_consensus_of_agreeing_lines_is_their_intersection();
+    test_consensus_leaves_out_a_bad_sweep();
+    test_consensus_fails_when_it_cannot_tell();
     printf("lh2_fusion: %d passed, %d failed\n", _passed, _failed);
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
