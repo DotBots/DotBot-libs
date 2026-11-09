@@ -192,6 +192,17 @@
     <file file_name="lh2_geometry/lh2_geometry.c" />
     <file file_name="lh2_geometry.h" />
   </project>
+  <project Name="00drv_lh2_decoder">
+    <configuration
+      Name="Common"
+      gcc_optimization_level="Level 2 for size"
+      project_dependencies="00drv_lh2_geometry"
+      project_directory="."
+      project_type="Library" />
+    <file file_name="lh2_decoder/lh2_checkpoints.c" />
+    <file file_name="lh2_decoder/lh2_decoder.c" />
+    <file file_name="lh2_decoder.h" />
+  </project>
   <project Name="00drv_lh2_fusion">
     <configuration
       Name="Common"

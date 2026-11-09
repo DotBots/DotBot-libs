@@ -128,7 +128,7 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
@@ -137,11 +137,13 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_lh2_geometry
 	$(TEST_BUILD_DIR)/test_lh2_fusion
 	$(TEST_BUILD_DIR)/test_lh2_baseline
+	$(TEST_BUILD_DIR)/test_lh2_decoder
 
-# The full-size sweeps of the LH2 baseline: a million random captures, and the
+# The full-size sweeps of the LH2 baseline and the decoder comparison: a million random captures, and the
 # LFSR search over all 32 polynomials
-test-long: $(TEST_BUILD_DIR)/test_lh2_baseline
+test-long: $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder
 	$(TEST_BUILD_DIR)/test_lh2_baseline --long
+	$(TEST_BUILD_DIR)/test_lh2_decoder --long
 
 # Every host suite again, under AddressSanitizer and UndefinedBehaviorSanitizer
 SANITIZE_FLAGS ?= -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
@@ -176,6 +178,14 @@ LH2_BASELINE_HDRS = tests/lh2_reference.h tests/lh2_synth.h drv/lh2_geometry.h
 $(TEST_BUILD_DIR)/test_lh2_baseline: $(LH2_BASELINE_SRCS) $(LH2_BASELINE_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_BASELINE_SRCS) -lm
+
+# drv/lh2_decoder against that frozen copy, capture by capture
+LH2_DECODER_SRCS = tests/test_lh2_decoder.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c tests/lh2_reference.c tests/lh2_synth.c drv/lh2_geometry/lh2_geometry.c
+LH2_DECODER_HDRS = drv/lh2_decoder.h tests/lh2_reference.h tests/lh2_synth.h drv/lh2_geometry.h
+
+$(TEST_BUILD_DIR)/test_lh2_decoder: $(LH2_DECODER_SRCS) $(LH2_DECODER_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_DECODER_SRCS) -lm
 
 CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c drv/lh2_fusion/lh2_fusion.c
 CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h drv/lh2_fusion.h drv/lh2_geometry.h
