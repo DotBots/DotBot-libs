@@ -67,6 +67,10 @@
 /// station back on air sweeps a few mm off for its first seconds
 #define DB_CONTROL_STATION_SETTLE_TICKS (250U)  ///< 2.5 s
 
+/// While tracking, a rejected line this far off the pose is taken for a
+/// kidnap even when another line of its read is accepted; nearer, for a bad sweep
+#define DB_CONTROL_LINE_KIDNAP_MM (50.0f)
+
 /// The advertisement's heading while the estimator has none
 #define DB_CONTROL_DIRECTION_INVALID (-1000)
 
