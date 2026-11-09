@@ -63,6 +63,17 @@ static void _travel_recent(const db_pose_estimator_t *est, uint32_t age, float *
     *dtheta = est->theta - theta;
 }
 
+/// No wheel count over the whole travel ring: the robot cannot have turned,
+/// so a measurement then moves the position only
+static bool _standing(const db_pose_estimator_t *est) {
+    for (uint32_t i = 0; i < DB_POSE_ESTIMATOR_FIX_AGE_MAX; i++) {
+        if (est->travel.d[i] != 0 || est->travel.dtheta[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// Moves the pose and its covariance over one odometry step
 static void _propagate(db_pose_estimator_t *est, float d, float dtheta, float q_theta, float q_pos_slip) {
     float mid = est->theta + 0.5f * dtheta;
@@ -366,6 +377,10 @@ static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float 
         k[i][0] = pht[i][0] * i00 + pht[i][1] * i10;
         k[i][1] = pht[i][0] * i01 + pht[i][1] * i11;
     }
+    if (_standing(est)) {
+        k[2][0] = 0;
+        k[2][1] = 0;
+    }
     est->x += k[0][0] * y0 + k[0][1] * y1;
     est->y += k[1][0] * y0 + k[1][1] * y1;
     est->theta = _wrap(est->theta + k[2][0] * y0 + k[2][1] * y1);
@@ -397,6 +412,35 @@ static db_pose_estimator_result_t _gated_update(db_pose_estimator_t *est, float 
         }
     }
     return DB_POSE_ESTIMATOR_ACCEPTED;
+}
+
+/// Joseph-form covariance update for a scalar measurement with Jacobian h,
+/// gain k and variance r: P = (I - k h) P (I - k h)^T + r k k^T
+static void _joseph_scalar(float P[3][3], const float h[3], const float k[3], float r) {
+    float ikh[3][3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            ikh[i][j] = (float)(i == j) - k[i] * h[j];
+        }
+    }
+    float ap[3][3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            ap[i][j] = ikh[i][0] * P[0][j] + ikh[i][1] * P[1][j] + ikh[i][2] * P[2][j];
+        }
+    }
+    float np[3][3];
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j <= i; j++) {
+            np[i][j] = ap[i][0] * ikh[j][0] + ap[i][1] * ikh[j][1] + ap[i][2] * ikh[j][2] + r * k[i] * k[j];
+        }
+    }
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j <= i; j++) {
+            P[i][j] = np[i][j];
+            P[j][i] = np[i][j];
+        }
+    }
 }
 
 //=========================== public ===========================================
@@ -513,6 +557,56 @@ db_pose_estimator_result_t db_pose_estimator_update(db_pose_estimator_t *est, fl
         est->rejected++;
     }
     return result;
+}
+
+db_pose_estimator_result_t db_pose_estimator_update_line(db_pose_estimator_t *est, float nx, float ny, float d_mm, float var_mm2, float gate) {
+    est->last_innovation_mm = NAN;
+    if (est->status != DB_POSE_ESTIMATOR_TRACKING) {
+        return DB_POSE_ESTIMATOR_REJECTED;
+    }
+    float norm = sqrtf(nx * nx + ny * ny);
+    if (!isfinite(norm) || !isfinite(d_mm) || !(norm > 1e-6f) || !isfinite(var_mm2) || !(var_mm2 > 0)) {
+        return DB_POSE_ESTIMATOR_REJECTED;
+    }
+    nx /= norm;
+    ny /= norm;
+    d_mm /= norm;
+    var_mm2 /= norm * norm;
+
+    const db_pose_estimator_conf_t *conf = est->conf;
+    float(*P)[3]                         = est->P;
+
+    float ax, ay, dtheta, lx0, ly0, lx, ly;
+    _travel_recent(est, _fix_age(conf), &ax, &ay, &dtheta);
+    _lever(conf, est->theta - dtheta, &lx0, &ly0);
+    _lever(conf, est->theta, &lx, &ly);
+    d_mm += nx * (ax + lx - lx0) + ny * (ay + ly - ly0);
+
+    float innovation = d_mm - (nx * (est->x + lx) + ny * (est->y + ly));
+    // H = [nx, ny, n . d(lever)/d(theta)], with d(lever)/d(theta) = (-ly, lx)
+    float h[3] = { nx, ny, -nx * ly + ny * lx };
+    float ph[3];
+    for (int i = 0; i < 3; i++) {
+        ph[i] = P[i][0] * h[0] + P[i][1] * h[1] + P[i][2] * h[2];
+    }
+    float s = h[0] * ph[0] + h[1] * ph[1] + h[2] * ph[2] + var_mm2;
+    if (!(s > 0)) {
+        return DB_POSE_ESTIMATOR_REJECTED;
+    }
+    float d2                = innovation * innovation / s;
+    est->last_line_d2       = d2;
+    est->last_innovation_mm = innovation;
+    if (!(d2 <= gate)) {
+        return DB_POSE_ESTIMATOR_REJECTED;
+    }
+
+    float k[3] = { ph[0] / s, ph[1] / s, _standing(est) ? 0 : ph[2] / s };
+    est->x += k[0] * innovation;
+    est->y += k[1] * innovation;
+    est->theta = _wrap(est->theta + k[2] * innovation);
+    _joseph_scalar(P, h, k, var_mm2);
+    est->ticks_since_accept = 0;
+    return DB_POSE_ESTIMATOR_ACCEPTED;
 }
 
 bool db_pose_estimator_heading_deg(const db_pose_estimator_t *est, float *deg) {

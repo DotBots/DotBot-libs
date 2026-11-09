@@ -81,7 +81,7 @@
   <project Name="01bsp_lighthouse">
     <configuration
       Name="Common"
-      project_dependencies="00bsp_dotbot_board(bsp);00bsp_dotbot_lh2(bsp)"
+      project_dependencies="00bsp_dotbot_board(bsp);00bsp_dotbot_lh2(bsp);00drv_lh2_geometry(drv)"
       project_directory="01bsp_lighthouse"
       project_type="Executable" />
     <folder Name="Device Files">
@@ -589,7 +589,7 @@
   <project Name="03app_dotbot">
     <configuration
       Name="Common"
-      project_dependencies="00bsp_dotbot_board(bsp);00bsp_dotbot_lh2(bsp);00bsp_dotbot_motors(bsp);00bsp_timer(bsp);00drv_dotbot_hdlc(drv);00drv_dotbot_protocol(drv);00bsp_dotbot_rgbled(bsp);00bsp_radio(bsp)"
+      project_dependencies="00bsp_dotbot_board(bsp);00bsp_dotbot_lh2(bsp);00drv_lh2_geometry(drv);00bsp_dotbot_motors(bsp);00bsp_timer(bsp);00drv_dotbot_hdlc(drv);00drv_dotbot_protocol(drv);00bsp_dotbot_rgbled(bsp);00bsp_radio(bsp)"
       project_directory="03app_dotbot"
       project_type="Executable" />
     <folder Name="Device Files">

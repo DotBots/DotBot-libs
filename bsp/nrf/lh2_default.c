@@ -21,10 +21,13 @@
 #include "lh2.h"
 #include "lh2_decoder.h"
 #include "lh2_checkpoints.h"
+#include "lh2_geometry.h"
 #include "timer_hf.h"
 #include "board_config.h"
 
 //=========================== defines =========================================
+
+_Static_assert(LH2_BASESTATION_COUNT == DB_LH2_GEOMETRY_STATIONS, "lh2_geometry carries a period per basestation");
 
 #define SPIM_INTERRUPT_PRIORITY 2   ///< Interrupt priority, as high as it will go
 #define SPI_BUFFER_SIZE         64  ///< Size of buffers used for SPI communications
@@ -47,7 +50,6 @@
 #define HASH_TABLE_SIZE                        (1 << HASH_TABLE_BITS)                                         ///< How big will the hashtable for the _end_buffers
 #define HASH_TABLE_MASK                        ((1 << HASH_TABLE_BITS) - 1)                                   ///< Mask selecting the HAS_TABLE_BITS least significant bits
 #define NUM_LSFR_COUNT_CHECKPOINTS             64                                                             ///< How many lsfr checkpoints are per polynomial
-#define LH2_PERIOD_TICKS_PER_COUNT             8                                                              ///< ticks of the _periods[] unit per LFSR count, so _periods / this is one rotation in counts
 #define DISTANCE_BETWEEN_LSFR_CHECKPOINTS      2048                                                           ///< How many lsfr checkpoints are per polynomial
 #define CHECKPOINT_TABLE_BITS                  6                                                              ///< How many bits will be used for the checkpoint table for the lfsr search
 #define CHECKPOINT_TABLE_MASK_LOW              ((1 << CHECKPOINT_TABLE_BITS) - 1)                             ///< How big will the checkpoint table for the lfsr search
@@ -104,25 +106,6 @@ static const uint16_t _lh2_sweep_period_us[LH2_BASESTATION_COUNT] = {
     18771,
     18604,
     18479,
-};
-
-static const uint32_t _periods[LH2_BASESTATION_COUNT] = {
-    959000,
-    957000,
-    953000,
-    949000,
-    947000,
-    943000,
-    941000,
-    939000,
-    937000,
-    929000,
-    919000,
-    911000,
-    907000,
-    901000,
-    893000,
-    887000,
 };
 
 typedef struct {
@@ -411,7 +394,7 @@ void db_lh2_process_location(db_lh2_t *lh2) {
     temp_lfsr_loc -= temp_bit_offset;
 
     // A count past a full rotation, or equal to the other sweep's, comes from a false polynomial match
-    if (temp_lfsr_loc > _periods[basestation] / LH2_PERIOD_TICKS_PER_COUNT) {
+    if (temp_lfsr_loc > db_lh2_period(basestation) / DB_LH2_PERIOD_TICKS_PER_COUNT) {
         lh2->data_ready[sweep][basestation] = DB_LH2_NO_NEW_DATA;
         return;
     }
@@ -436,20 +419,15 @@ void db_lh2_process_location(db_lh2_t *lh2) {
 }
 
 void db_lh2_calculate_position(uint32_t count1, uint32_t count2, uint32_t basestation_index, double *coordinates) {
-
-    double alpha_1 = ((double)(count1) * 8.0 / _periods[basestation_index]) * 2.0 * M_PI;
-    double alpha_2 = ((double)(count2) * 8.0 / _periods[basestation_index]) * 2.0 * M_PI;
-
-    double cam_x = -tan(0.5 * (alpha_1 + alpha_2));
-    double cam_y = 0;
-
-    if (count1 < count2) {
-        cam_y = -sin(alpha_2 / 2 - alpha_1 / 2 - 60 * M_PI / 180) / tan(M_PI / 6);
-    } else {
-        cam_y = -sin(alpha_1 / 2 - alpha_2 / 2 - 60 * M_PI / 180) / tan(M_PI / 6);
-    };
-    // cam_y so far is -tan(elevation); the pinhole image point divides it by cos(azimuth)
-    cam_y *= sqrt(1 + cam_x * cam_x);
+    if (basestation_index >= LH2_BASESTATION_COUNT) {
+        coordinates[0] = NAN;
+        coordinates[1] = NAN;
+        return;
+    }
+    double cam[2];
+    db_lh2_camera_point(count1, count2, (uint8_t)basestation_index, cam);
+    double cam_x = cam[0];
+    double cam_y = cam[1];
 
     double x_position = homography_matrix[basestation_index][0][0] * cam_x + homography_matrix[basestation_index][0][1] * cam_y + homography_matrix[basestation_index][0][2];
     double y_position = homography_matrix[basestation_index][1][0] * cam_x + homography_matrix[basestation_index][1][1] * cam_y + homography_matrix[basestation_index][1][2];

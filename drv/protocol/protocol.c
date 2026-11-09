@@ -61,11 +61,11 @@ size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, applic
     return header_length + sizeof(uint8_t) + sizeof(uint8_t);
 }
 
-size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, uint8_t calibrated) {
-    size_t header_length                        = db_frame_header_to_buffer(buffer, dst);
-    *(buffer + header_length)                   = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
-    *(buffer + header_length + sizeof(uint8_t)) = calibrated;
-    return header_length + sizeof(uint8_t) + sizeof(uint8_t);
+size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, uint16_t calibrated) {
+    size_t header_length      = db_frame_header_to_buffer(buffer, dst);
+    *(buffer + header_length) = DB_PROTOCOL_DOTBOT_ADVERTISEMENT;
+    memcpy(buffer + header_length + sizeof(uint8_t), &calibrated, sizeof(calibrated));
+    return header_length + sizeof(uint8_t) + sizeof(calibrated);
 }
 
 size_t db_protocol_cmd_move_raw_to_buffer(uint8_t *buffer, uint64_t dst, protocol_move_raw_command_t *command) {

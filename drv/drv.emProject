@@ -182,6 +182,25 @@
     <file file_name="pose_estimator/pose_estimator.c" />
     <file file_name="pose_estimator.h" />
   </project>
+  <project Name="00drv_lh2_geometry">
+    <configuration
+      Name="Common"
+      gcc_optimization_level="Level 2 for size"
+      project_dependencies=""
+      project_directory="."
+      project_type="Library" />
+    <file file_name="lh2_geometry/lh2_geometry.c" />
+    <file file_name="lh2_geometry.h" />
+  </project>
+  <project Name="00drv_lh2_fusion">
+    <configuration
+      Name="Common"
+      project_dependencies="00drv_pose_estimator"
+      project_directory="."
+      project_type="Library" />
+    <file file_name="lh2_fusion/lh2_fusion.c" />
+    <file file_name="lh2_fusion.h" />
+  </project>
   <project Name="00drv_wheel_control">
     <configuration
       Name="Common"
@@ -203,7 +222,7 @@
   <project Name="00drv_dotbot_control">
     <configuration
       Name="Common"
-      project_dependencies="00drv_pose_estimator;00drv_steering;00drv_wheel_control"
+      project_dependencies="00drv_lh2_fusion;00drv_pose_estimator;00drv_steering;00drv_wheel_control"
       project_directory="."
       project_type="Library" />
     <file file_name="dotbot_control/dotbot_control.c" />

@@ -26,8 +26,8 @@ import numpy as np
 import wasmtime
 
 WASM = Path(__file__).resolve().parent.parent / "build" / "wasm" / "dotbot_control.wasm"
-ABI_VERSION = 2
-GOLDEN = "3707b44e8c974d16575b6a19d3cb48d268bd295df3c8a4b827405b76716faa78"
+ABI_VERSION = 3
+GOLDEN = "dd2ae9eb53b237b794a8b51de57dd56d19c8e30fc40af09a5c3ab4e46f5dcce6"
 
 INPUT = np.dtype(
     [("counts_left", "<i4"), ("counts_right", "<i4"), ("fix_sequence", "<u4"),
@@ -61,7 +61,7 @@ EXPORTS = {
     "fleet_advertisement", "fleet_advertisements", "fleet_set_min_tx_interval", "layout_offsets",
     "layout_field_count", "fleet_fix_due", "fleet_fix_due_buffer",
 }
-ADVERTISEMENT_BYTES = 42
+ADVERTISEMENT_BYTES = 43
 
 STATES = ["IDLE", "NO_HEADING", "ALIGN", "DRIVE", "FINAL_TURN", "ARRIVED", "HOLD",
           "FAILED", "RECOVER", "SETTLE", "NUDGE"]

@@ -275,11 +275,11 @@ size_t db_protocol_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, applic
  *
  * @param[out]  buffer      Bytes array to write to
  * @param[in]   dst         Destination address written in the header
- * @param[in]   calibrated  Bitmask of the LH2 basestations with a stored homography (bit n = basestation n)
+ * @param[in]   calibrated  Bitmask of the LH2 stations with a stored homography (bit n = station n), 0xFFFF when not applicable
  *
  * @return                  Number of bytes written in the buffer
  */
-size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, uint8_t calibrated);
+size_t db_protocol_dotbot_advertizement_to_buffer(uint8_t *buffer, uint64_t dst, uint16_t calibrated);
 
 /**
  * @brief   Write a move raw command in a buffer
