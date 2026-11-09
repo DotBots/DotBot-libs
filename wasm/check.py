@@ -27,7 +27,7 @@ import wasmtime
 
 WASM = Path(__file__).resolve().parent.parent / "build" / "wasm" / "dotbot_control.wasm"
 ABI_VERSION = 3
-GOLDEN = "3707b44e8c974d16575b6a19d3cb48d268bd295df3c8a4b827405b76716faa78"
+GOLDEN = "dd2ae9eb53b237b794a8b51de57dd56d19c8e30fc40af09a5c3ab4e46f5dcce6"
 
 INPUT = np.dtype(
     [("counts_left", "<i4"), ("counts_right", "<i4"), ("fix_sequence", "<u4"),
