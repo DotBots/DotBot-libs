@@ -92,4 +92,22 @@ db_pose_estimator_result_t db_lh2_fusion_update(db_lh2_fusion_t *fusion, db_pose
  */
 bool db_lh2_fusion_intersect(const db_lh2_floor_line_t *lines, uint8_t count, float *x_mm, float *y_mm);
 
+/**
+ * @brief   The photodiode where the floor lines agree, leaving out at most one line
+ *
+ * The intersection of every well-formed line when each lies within
+ * DB_LH2_FUSION_GATE variances of it, as with two lines, which always do.
+ * Otherwise, from four lines up, that of all but the one line whose omission
+ * leaves the rest within the gate and nearest it. Three lines that disagree
+ * fix no point, since any two of them agree.
+ *
+ * @param[in]   lines   Floor lines, of any stations
+ * @param[in]   count   Lines in lines
+ * @param[out]  x_mm    Photodiode, frame axes
+ * @param[out]  y_mm    Photodiode, frame axes
+ *
+ * @return  lines the point rests on, 0 when none was set
+ */
+uint8_t db_lh2_fusion_consensus(const db_lh2_floor_line_t *lines, uint8_t count, float *x_mm, float *y_mm);
+
 #endif
