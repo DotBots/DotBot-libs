@@ -153,39 +153,39 @@ typedef struct {
 
 /// One robot's control state
 typedef struct {
-    const db_control_conf_t   *conf;                         ///< gains, not owned
-    db_wheel_control_t         wheel_left;                   ///< left wheel loop
-    db_wheel_control_t         wheel_right;                  ///< right wheel loop
-    db_pose_estimator_t        estimator;                    ///< pose estimator
-    db_steering_t              steering;                     ///< steering along waypoints
-    db_lh2_fusion_t            fusion;                       ///< per-station health of the LH2 sweeps fused
-    db_lh2_floor_line_t        lines[DB_CONTROL_LINES_MAX];  ///< staged for the next tick
-    uint8_t                    line_count;                   ///< lines staged
-    db_control_drive_mode_t    drive_mode;                   ///< which writer owns the motors
-    bool                       steering_brake;               ///< the steering holds the motors braked
-    uint8_t                    batch_id;                     ///< of the last batch accepted, 0 for none
-    protocol_waypoints_abort_t abort_reason;                 ///< what stopped the last batch
-    uint32_t                   tick;                         ///< ticks since init
-    uint32_t                   tick_position;                ///< tick of the last fix read
-    uint32_t                   tick_steering;                ///< tick of the last steering step
-    uint32_t                   tick_timeout;                 ///< tick of the last deadman check
-    uint32_t                   tick_advert;                  ///< tick of the last advertisement
-    uint32_t                   advert_period_ticks;          ///< ticks between advertisements
-    uint32_t                   last_command_tick;            ///< tick before the last direct or waypoint command
-    uint32_t                   fix_sequence;                 ///< sequence of the last fix read
-    bool                       has_position;                 ///< a fix in bounds has been read
-    uint32_t                   position_x;                   ///< last fix in bounds, mm
-    uint32_t                   position_y;                   ///< last fix in bounds, mm
-    uint32_t                   encoder_left;                 ///< counts since init, wrapping
-    uint32_t                   encoder_right;                ///< counts since init, wrapping
-    uint32_t                   advert_encoder_left;          ///< encoder_left at the last advertisement
-    uint32_t                   advert_encoder_right;         ///< encoder_right at the last advertisement
-    db_control_output_t        pending;                      ///< a motor write a command made, delivered by the next tick
-    int8_t                     pwm_left;                     ///< last duty written, 0 while braked
-    int8_t                     pwm_right;                    ///< last duty written, 0 while braked
-    bool                       brake_left;                   ///< last brake written
-    bool                       brake_right;                  ///< last brake written
-    db_control_fusion_record_t last_fusion;                  ///< the last tick that had floor lines staged
+    const db_control_conf_t   *conf;                                       ///< gains, not owned
+    db_wheel_control_t         wheel_left;                                 ///< left wheel loop
+    db_wheel_control_t         wheel_right;                                ///< right wheel loop
+    db_pose_estimator_t        estimator;                                  ///< pose estimator
+    db_steering_t              steering;                                   ///< steering along waypoints
+    db_lh2_fusion_t            fusion;                                     ///< per-station health of the LH2 sweeps fused
+    db_lh2_floor_line_t        lines[DB_CONTROL_LINES_MAX];                ///< staged for the next tick
+    uint8_t                    line_count;                                 ///< lines staged
+    db_control_drive_mode_t    drive_mode;                                 ///< which writer owns the motors
+    bool                       steering_brake;                             ///< the steering holds the motors braked
+    uint8_t                    batch_id;                                   ///< of the last batch accepted, 0 for none
+    protocol_waypoints_abort_t abort_reason;                               ///< what stopped the last batch
+    uint32_t                   tick;                                       ///< ticks since init
+    uint32_t                   tick_position;                              ///< tick of the last fix read
+    uint32_t                   tick_steering;                              ///< tick of the last steering step
+    uint32_t                   tick_timeout;                               ///< tick of the last deadman check
+    uint32_t                   tick_advert;                                ///< tick of the last advertisement
+    uint32_t                   advert_period_ticks;                        ///< ticks between advertisements
+    uint32_t                   last_command_tick;                          ///< tick before the last direct or waypoint command
+    uint32_t                   fix_sequence;                               ///< sequence of the last fix read
+    bool                       has_position;                               ///< a fix in bounds has been read
+    uint32_t                   position_x;                                 ///< last fix in bounds, mm
+    uint32_t                   position_y;                                 ///< last fix in bounds, mm
+    uint32_t                   encoder_left;                               ///< counts since init, wrapping
+    uint32_t                   encoder_right;                              ///< counts since init, wrapping
+    uint32_t                   advert_encoder_left;                        ///< encoder_left at the last advertisement
+    uint32_t                   advert_encoder_right;                       ///< encoder_right at the last advertisement
+    db_control_output_t        pending;                                    ///< a motor write a command made, delivered by the next tick
+    int8_t                     pwm_left;                                   ///< last duty written, 0 while braked
+    int8_t                     pwm_right;                                  ///< last duty written, 0 while braked
+    bool                       brake_left;                                 ///< last brake written
+    bool                       brake_right;                                ///< last brake written
+    db_control_fusion_record_t last_fusion;                                ///< the last tick that had floor lines staged
     uint32_t                   station_line_tick[DB_LH2_FUSION_STATIONS];  ///< tick of each station's last line, 0 before its first
     uint32_t                   station_back_tick[DB_LH2_FUSION_STATIONS];  ///< tick each station's lines resumed after an absence, 0 for never
 } db_control_t;

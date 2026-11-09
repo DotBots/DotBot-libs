@@ -690,8 +690,8 @@ static void test_lines_ignored_while_seeding(void) {
 static void _cross(float x, float y, float angle_deg, uint8_t station, db_lh2_floor_line_t out[2]) {
     float a = angle_deg * (float)M_PI / 180.0f;
     float c = cosf(a), s = sinf(a);
-    out[0]  = (db_lh2_floor_line_t){ .nx = c, .ny = s, .d_mm = c * x + s * y, .var_mm2 = 1, .station = station, .sweep = 0 };
-    out[1]  = (db_lh2_floor_line_t){ .nx = -s, .ny = c, .d_mm = -s * x + c * y, .var_mm2 = 1, .station = station, .sweep = 1 };
+    out[0] = (db_lh2_floor_line_t){ .nx = c, .ny = s, .d_mm = c * x + s * y, .var_mm2 = 1, .station = station, .sweep = 0 };
+    out[1] = (db_lh2_floor_line_t){ .nx = -s, .ny = c, .d_mm = -s * x + c * y, .var_mm2 = 1, .station = station, .sweep = 1 };
 }
 
 /// Runs a robot at rest with no heading, staging with each new fix station 0's

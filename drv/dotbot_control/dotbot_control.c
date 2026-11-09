@@ -260,7 +260,7 @@ static bool _station_settling(db_control_t *control, uint8_t station, uint32_t t
         control->station_back_tick[station] = tick;
     }
     control->station_line_tick[station] = tick;
-    uint32_t back                        = control->station_back_tick[station];
+    uint32_t back                       = control->station_back_tick[station];
     return back != 0 && tick - back < DB_CONTROL_STATION_SETTLE_TICKS;
 }
 
@@ -406,12 +406,12 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
 
     // The fix is where the lines meet, those the gate took while tracking,
     // else the secure side's solve
-    db_lh2_floor_line_t fix_lines[DB_CONTROL_LINES_MAX];
-    uint8_t             fix_line_count = 0;
-    bool                tracking       = control->estimator.status == DB_POSE_ESTIMATOR_TRACKING;
-    uint8_t             fused          = 0;
-    bool                any_rejected   = false;
-    db_control_fusion_record_t *record = &control->last_fusion;
+    db_lh2_floor_line_t         fix_lines[DB_CONTROL_LINES_MAX];
+    uint8_t                     fix_line_count = 0;
+    bool                        tracking       = control->estimator.status == DB_POSE_ESTIMATOR_TRACKING;
+    uint8_t                     fused          = 0;
+    bool                        any_rejected   = false;
+    db_control_fusion_record_t *record         = &control->last_fusion;
     if (control->line_count > 0) {
         record->count = control->line_count;
     }
@@ -424,9 +424,9 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
         }
         fused++;
         control->estimator.last_innovation_mm = NAN;
-        db_pose_estimator_result_t result = db_lh2_fusion_update(&control->fusion, &control->estimator, &control->lines[i]);
-        record->result[i]                 = (uint8_t)result;
-        record->innovation_mm[i]          = control->estimator.last_innovation_mm;
+        db_pose_estimator_result_t result     = db_lh2_fusion_update(&control->fusion, &control->estimator, &control->lines[i]);
+        record->result[i]                     = (uint8_t)result;
+        record->innovation_mm[i]              = control->estimator.last_innovation_mm;
         if (result != DB_POSE_ESTIMATOR_ACCEPTED) {
             any_rejected = true;
         }
@@ -434,10 +434,10 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
             fix_lines[fix_line_count++] = control->lines[i];
         }
     }
-    bool lines_accepted = fused > 0 && !any_rejected;
+    bool  lines_accepted = fused > 0 && !any_rejected;
     float fix_x;
     float fix_y;
-    bool  fix_valid = db_lh2_fusion_intersect(fix_lines, fix_line_count, &fix_x, &fix_y) && fix_x >= 0 && fix_y >= 0 && fix_x <= POSITION_INVALID_MM && fix_y <= POSITION_INVALID_MM;
+    bool  fix_valid      = db_lh2_fusion_intersect(fix_lines, fix_line_count, &fix_x, &fix_y) && fix_x >= 0 && fix_y >= 0 && fix_x <= POSITION_INVALID_MM && fix_y <= POSITION_INVALID_MM;
     bool  fix_from_lines = fix_valid;
     if (!fix_valid && in->fix_x <= POSITION_INVALID_MM && in->fix_y <= POSITION_INVALID_MM) {
         fix_x     = (float)in->fix_x;

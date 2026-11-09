@@ -61,7 +61,7 @@ bool db_lh2_fusion_intersect(const db_lh2_floor_line_t *lines, uint8_t count, fl
         }
         float n  = sqrtf(n2);
         float nx = l->nx / n, ny = l->ny / n, d = l->d_mm / n;
-        float w  = n2 / l->var_mm2;
+        float w = n2 / l->var_mm2;
         a00 += w * nx * nx;
         a01 += w * nx * ny;
         a11 += w * ny * ny;
