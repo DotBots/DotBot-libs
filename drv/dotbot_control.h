@@ -67,6 +67,11 @@
 /// station back on air sweeps a few mm off for its first seconds
 #define DB_CONTROL_STATION_SETTLE_TICKS (250U)  ///< 2.5 s
 
+/// While not tracking and the wheels stand, a fix resting on fewer than three
+/// floor lines is left out for this long after one resting on more: past a
+/// station's absence and its settling, during which only the other is heard
+#define DB_CONTROL_CHECKED_FIX_TICKS (DB_CONTROL_STATION_ABSENT_TICKS + DB_CONTROL_STATION_SETTLE_TICKS + 100U)  ///< 4 s
+
 /// While tracking, a rejected line this far off the pose is taken for a
 /// kidnap even when another line of its read is accepted; nearer, for a bad sweep
 #define DB_CONTROL_LINE_KIDNAP_MM (50.0f)
@@ -192,6 +197,7 @@ typedef struct {
     db_control_fusion_record_t last_fusion;                                ///< the last tick that had floor lines staged
     uint32_t                   station_line_tick[DB_LH2_FUSION_STATIONS];  ///< tick of each station's last line, 0 before its first
     uint32_t                   station_back_tick[DB_LH2_FUSION_STATIONS];  ///< tick each station's lines resumed after an absence, 0 for never
+    uint32_t                   checked_fix_tick;                           ///< tick of the last fix on three lines or more, at rest and not tracking; 0 for none
 } db_control_t;
 
 /// The DotBot v3 gains and limits the app runs with

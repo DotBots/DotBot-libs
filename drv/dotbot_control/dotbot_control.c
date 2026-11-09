@@ -464,6 +464,17 @@ void db_control_tick(db_control_t *control, const db_control_input_t *in, db_con
         fix_valid    = true;
         fix_rests_on = 0;
     }
+    // At rest, a fix no third line checks, as one station's is, waits for one that is
+    if (in->counts_left != 0 || in->counts_right != 0) {
+        control->checked_fix_tick = 0;
+    }
+    if (!tracking && fix_valid) {
+        if (fix_from_lines && fix_rests_on >= 3) {
+            control->checked_fix_tick = tick;
+        } else if (control->checked_fix_tick != 0 && tick - control->checked_fix_tick <= DB_CONTROL_CHECKED_FIX_TICKS) {
+            fix_valid = false;
+        }
+    }
     if (control->line_count > 0) {
         record->fix_valid      = fix_valid;
         record->fix_from_lines = fix_from_lines;

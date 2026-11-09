@@ -925,10 +925,11 @@ static void test_station_back_on_air_settles(void) {
 
 /// A robot at rest where station 1's sweep 0 line is 20 mm off along its
 /// normal on a random 57 % of reads, the photodiode moved by (dx, dy), and
-/// station 0 in a read with probability both_pct %; the input's solve is
+/// station 0 in a read with probability both_pct %, and absent for the first
+/// 6 of every drop_every reads when that is set; the input's solve is
 /// station 1's pair. Returns the advertised photodiode's largest distance from
 /// the truth over the fixes after the first skip ones.
-static float _bimodal_at_rest(sim_t *s, uint32_t fixes, uint32_t skip, uint32_t both_pct, float dx, float dy) {
+static float _bimodal_at_rest(sim_t *s, uint32_t fixes, uint32_t skip, uint32_t both_pct, uint32_t drop_every, float dx, float dy) {
     float worst = 0;
     for (uint32_t n = 0; n < fixes;) {
         db_control_input_t in;
@@ -947,7 +948,7 @@ static float _bimodal_at_rest(sim_t *s, uint32_t fixes, uint32_t skip, uint32_t 
             if (_uniform(&s->plant) < 0.57f) {
                 lines[2].d_mm += 20.0f;
             }
-            bool  both = _uniform(&s->plant) * 100.0f < (float)both_pct;
+            bool  both = _uniform(&s->plant) * 100.0f < (float)both_pct && !(drop_every && n % drop_every < 6);
             float sx = tx, sy = ty;
             db_lh2_fusion_intersect(&lines[2], 2, &sx, &sy);
             in.fix_x = (uint32_t)lroundf(sx);
@@ -972,18 +973,47 @@ static void test_bimodal_line_keeps_tracking(void) {
     sim_t s;
     _sim_init(&s, 1);
     s.plant.noise_mm               = 0;
-    float                      off = _bimodal_at_rest(&s, 1000, 0, 70, 0, 0);
+    float                      off = _bimodal_at_rest(&s, 1000, 0, 70, 0, 0, 0);
     const db_pose_estimator_t *est = &s.control.estimator;
     CHECK(est->status == DB_POSE_ESTIMATOR_TRACKING && est->kidnaps == 0, "bimodal line, tracking: still tracking over 1000 fixes, %u kidnaps, status %u", est->kidnaps, est->status);
     CHECK(off <= 1.5f, "bimodal line, tracking: the advertised photodiode within 1.5 mm, %.1f mm off", off);
+}
+
+static void test_bimodal_line_untracked_holds_still(void) {
+    // Never driven, so never tracking: the advertisement is each read's fix
+    sim_t s;
+    _sim_init(&s, 0);
+    s.plant.noise_mm = 0;
+    float off        = _bimodal_at_rest(&s, 1000, 10, 90, 0, 0, 0);
+    CHECK(s.control.estimator.status != DB_POSE_ESTIMATOR_TRACKING, "bimodal line, untracked: never tracks at rest");
+    CHECK(off <= 5.0f, "bimodal line, untracked: the advertised photodiode within 5 mm after the first second, %.1f mm off", off);
+
+    // As on the bench: station 0 off air for 0.6 s every 6 s, then settling
+    _sim_init(&s, 0);
+    s.plant.noise_mm = 0;
+    off              = _bimodal_at_rest(&s, 1000, 10, 100, 60, 0, 0);
+    CHECK(off <= 5.0f, "bimodal line, untracked, station 0 dropping out: within 5 mm through its settling, %.1f mm off", off);
+}
+
+static void test_untracked_at_rest_follows_a_move_by_hand(void) {
+    // Carried, wheels still, to where station 1 alone is in view: its fixes
+    // are taken once the last checked fix is old enough
+    sim_t s;
+    _sim_init(&s, 0);
+    s.plant.noise_mm = 0;
+    _bimodal_at_rest(&s, 100, 0, 100, 0, 0, 0);
+    _bimodal_at_rest(&s, 50, 0, 0, 0, 300.0f, -200.0f);
+    float tx = s.plant.px[PLANT_FIX_AGE] + 300.0f, ty = s.plant.py[PLANT_FIX_AGE] - 200.0f;
+    float d = hypotf((float)s.control.position_x - tx, (float)s.control.position_y - ty);
+    CHECK(d < 25.0f, "untracked, moved 360 mm by hand: the fix follows within 5 s, %.1f mm off", d);
 }
 
 static void test_bimodal_line_still_sees_a_kidnap(void) {
     sim_t s;
     _sim_init(&s, 1);
     s.plant.noise_mm = 0;
-    _bimodal_at_rest(&s, 200, 0, 70, 0, 0);
-    _bimodal_at_rest(&s, 20, 0, 70, 300.0f, -200.0f);
+    _bimodal_at_rest(&s, 200, 0, 70, 0, 0, 0);
+    _bimodal_at_rest(&s, 20, 0, 70, 0, 300.0f, -200.0f);
     const db_pose_estimator_t *est = &s.control.estimator;
     CHECK(est->kidnaps == 1 && est->status == DB_POSE_ESTIMATOR_SEEDING, "bimodal line, moved 360 mm: the kidnap is seen within 2 s, %u kidnaps, status %u", est->kidnaps, est->status);
 }
@@ -1013,7 +1043,9 @@ int main(void) {
     test_station_dark_at_rest_keeps_the_heading();
     test_station_back_on_air_settles();
     test_bimodal_line_keeps_tracking();
+    test_bimodal_line_untracked_holds_still();
     test_bimodal_line_still_sees_a_kidnap();
+    test_untracked_at_rest_follows_a_move_by_hand();
     printf("dotbot_control: %d passed, %d failed\n", _passed, _failed);
     return _failed ? 1 : 0;
 }
