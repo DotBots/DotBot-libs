@@ -40,6 +40,22 @@ jobs:
       - name: Run host-side tests
         run: make test
 
+  host-tests-long:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Run the full-size host test sweeps
+        run: make test-long
+
+  host-tests-sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Run host-side tests under ASan and UBSan
+        run: make test-sanitize
+
   style:
     runs-on: ubuntu-latest
     steps:
@@ -103,7 +119,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # needs: [docker, doc, style, build-success]
-    needs: [doc, style, host-tests, wasm, build-success]
+    needs: [doc, style, host-tests, host-tests-long, host-tests-sanitize, wasm, build-success]
     permissions:
       contents: write
     if: >-
