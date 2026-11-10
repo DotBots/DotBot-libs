@@ -77,7 +77,8 @@ typedef struct {
     uint32_t              fix_sequence;
     uint32_t              fix_x;
     uint32_t              fix_y;
-    bool                  open_loop;  ///< the plant runs on pwm_left and pwm_right, not on the control core
+    bool                  open_loop;     ///< the plant runs on pwm_left and pwm_right, not on the control core
+    bool                  latest_pairs;  ///< take a station's two latest counts as they are, as the frozen copy did
     int8_t                pwm_left;
     int8_t                pwm_right;
     // the last read, for the rows to inspect
@@ -153,7 +154,14 @@ static void _read_fix(scene_t *s, db_control_input_t *in) {
     db_lh2_select_begin(&s->fix);
     for (uint8_t station = 0; station < DB_LH2_STATIONS; station++) {
         db_lh2_pair_t pair;
-        if (!db_lh2_decoder_take_pair(&s->dec, station, &pair)) {
+        if (s->latest_pairs) {
+            if (!db_lh2_decoder_pair_ready(&s->dec, station)) {
+                continue;
+            }
+            pair                          = (db_lh2_pair_t){ .station = station, .count = { s->dec.slot[0][station].count, s->dec.slot[1][station].count }, .t_us = { s->dec.slot[0][station].t_us, s->dec.slot[1][station].t_us } };
+            s->dec.slot[0][station].ready = false;
+            s->dec.slot[1][station].ready = false;
+        } else if (!db_lh2_decoder_take_pair(&s->dec, station, &pair)) {
             continue;
         }
         if (s->pairs < 4) {
@@ -343,33 +351,50 @@ static void _drive(scene_t *s, int8_t pwm_left, int8_t pwm_right, uint32_t ticks
 
 static void test_e2_drive_and_l8_speed(void) {
     static drive_t      d;
+    static double       all[8000];
     static const int8_t pwm[] = { 42, 52, 61, 71, 81 };  // about 100, 200, 300, 400, 500 mm/s
-    double              p95_mixed[5], p95_same[5];
-    for (uint8_t k = 0; k < 5; k++) {
-        memset(&d, 0, sizeof(d));
-        double v = 0;
-        // Eight rotor phases against the 100 ms read, so reads land in every part of a revolution
-        for (uint8_t j = 0; j < 8; j++) {
-            scene_t *s = &_s;
-            _scene_init(s, 400, 300, 0, 21 + k * 8 + j);
-            for (uint8_t i = 0; i < s->n; i++) {
-                s->st[i].t0_us += j * lh2_synth_period_us(s->st[i].station) / 8.0;
+    double              p95[2][5], p95_mixed[5];
+    uint32_t            mixed[2][5];
+    for (uint8_t latest = 0; latest < 2; latest++) {
+        for (uint8_t k = 0; k < 5; k++) {
+            memset(&d, 0, sizeof(d));
+            double v = 0;
+            // Eight rotor phases against the 100 ms read, so reads land in every part of a revolution
+            for (uint8_t j = 0; j < 8; j++) {
+                scene_t *s = &_s;
+                _scene_init(s, 400, 300, 0, 21 + k * 8 + j);
+                s->latest_pairs = latest;
+                for (uint8_t i = 0; i < s->n; i++) {
+                    s->st[i].t0_us += j * lh2_synth_period_us(s->st[i].station) / 8.0;
+                }
+                db_control_seed(&s->control, 400, 300, 0);
+                _run(s, 30);
+                _drive(s, pwm[k], pwm[k], 150, &d);
+                v = 0.5 * (s->plant.v_left + s->plant.v_right);
             }
-            db_control_seed(&s->control, 400, 300, 0);
-            _run(s, 30);
-            _drive(s, pwm[k], pwm[k], 150, &d);
-            v = 0.5 * (s->plant.v_left + s->plant.v_right);
-        }
-        p95_same[k]  = _percentile(d.same, d.n_same, 0.95);
-        p95_mixed[k] = _percentile(d.mixed, d.n_mixed, 0.95);
-        MEASURED("L8 straight at %.0f mm/s: %u fixes from pairs in revolution order, error to the truth at the later sweep p95 %.2f mm; %u from pairs straddling two revolutions, p95 %.2f mm; estimator within %.1f mm",
-                 v, d.n_same, p95_same[k], d.n_mixed, p95_mixed[k], d.est_max);
-        if (k == 2) {
-            CHECK(d.n_same + d.n_mixed >= 100 && d.est_max < 15.0, "E2: straight at 300 mm/s, the estimator tracks within 15 mm: %.1f mm", d.est_max);
-            CHECK(d.n_mixed * 10 > d.n_same, "L8 (today): pairs straddling two revolutions are solved: %u, against %u in order", d.n_mixed, d.n_same);
+            uint32_t n = 0;
+            for (uint32_t i = 0; i < d.n_same; i++) {
+                all[n++] = d.same[i];
+            }
+            for (uint32_t i = 0; i < d.n_mixed; i++) {
+                all[n++] = d.mixed[i];
+            }
+            p95[latest][k]   = _percentile(all, n, 0.95);
+            mixed[latest][k] = d.n_mixed;
+            if (latest) {
+                p95_mixed[k] = _percentile(d.mixed, d.n_mixed, 0.95);
+            }
+            MEASURED("L8 straight at %.0f mm/s, %s: %u fixes, %u from pairs straddling two revolutions; error to the truth at the pair's later sweep p95 %.2f mm; estimator within %.1f mm",
+                     v, latest ? "the two latest counts (the frozen copy)" : "pairs of one revolution", d.n_same + d.n_mixed, d.n_mixed, p95[latest][k], d.est_max);
+            if (k == 2 && !latest) {
+                CHECK(d.n_same + d.n_mixed >= 100 && d.est_max < 15.0, "E2: straight at 300 mm/s, the estimator tracks within 15 mm: %.1f mm", d.est_max);
+            }
         }
     }
-    CHECK(p95_mixed[4] > 2 * p95_mixed[0] && p95_mixed[4] > p95_same[4], "L8 (today): a straddling pair's error grows with speed: p95 %.2f mm at 100 mm/s, %.2f mm at 500 mm/s, %.2f mm for pairs in order at 500", p95_mixed[0], p95_mixed[4], p95_same[4]);
+    CHECK(mixed[1][2] > 12 && p95_mixed[4] > 2 * p95_mixed[0], "L8 (the frozen copy's pairing): pairs straddling two revolutions are solved, %u of 120 at 300 mm/s, their error growing with speed: p95 %.2f mm at 100, %.2f mm at 500 mm/s", mixed[1][2], p95_mixed[0], p95_mixed[4]);
+    CHECK(mixed[0][0] == 0 && mixed[0][2] == 0 && mixed[0][4] == 0, "L8 (changed): no pair straddles two revolutions: %u, %u, %u at 100, 300, 500 mm/s", mixed[0][0], mixed[0][2], mixed[0][4]);
+    CHECK(p95[0][0] < 0.5 && p95[0][2] < 1.0 && p95[0][4] < 2.0 && p95[0][4] * 3 < p95[1][4], "L8 (changed): the p95 error at 100, 300, 500 mm/s falls from %.2f, %.2f, %.2f mm to %.2f, %.2f, %.2f mm",
+          p95[1][0], p95[1][2], p95[1][4], p95[0][0], p95[0][2], p95[0][4]);
 
     memset(&d, 0, sizeof(d));
     scene_t *s = &_s;

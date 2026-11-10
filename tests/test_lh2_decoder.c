@@ -10,6 +10,7 @@
  *
  * @copyright Inria, 2026
  */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -237,6 +238,18 @@ static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uin
     }
     return false;
 }
+
+/// Two sweeps of one revolution, as the plan states it: the smaller count first, stamped as far apart as the counts say
+static bool _one_rev(uint32_t ca, uint32_t ta, uint32_t cb, uint32_t tb) {
+    if (ca == cb) {
+        return false;
+    }
+    double dt   = (ca < cb) ? (double)(int32_t)(tb - ta) : (double)(int32_t)(ta - tb);
+    double want = fabs((double)cb - (double)ca) / 6.0;
+    return dt > 0 && fabs(dt - want) <= DB_LH2_SLOT_TOLERANCE_US + 0.5;
+}
+
+static uint32_t _declared_pairs = 0;
 
 /// The swarmit glue's pair take, on the reference
 static bool _ref_take_pair(uint8_t station, uint32_t counts[2]) {
@@ -553,10 +566,19 @@ static void _golden_stream(const char *set, uint32_t seed, const lh2_synth_stati
         while (next_read <= t) {
             for (uint8_t station = 0; station < DB_LH2_STATIONS; station++) {
                 uint32_t      counts[2];
+                uint32_t      stamps[2] = { _ref.timestamps[0][station], _ref.timestamps[1][station] };
                 db_lh2_pair_t pair;
                 bool          want = _ref_take_pair(station, counts);
                 bool          got  = db_lh2_decoder_take_pair(&_dec, station, &pair);
-                pair_differ += want != got || (got && (pair.count[0] != counts[0] || pair.count[1] != counts[1] || pair.station != station));
+                if (want && got && pair.previous) {
+                    // declared: the copy's pair straddles two revolutions, the decoder's is one revolution's,
+                    // made with the slot's previous count and the copy's other one
+                    uint8_t p = (pair.previous & 1U) ? 0 : 1;
+                    _declared_pairs++;
+                    pair_differ += _one_rev(counts[0], stamps[0], counts[1], stamps[1]) || !_one_rev(pair.count[0], pair.t_us[0], pair.count[1], pair.t_us[1]) || pair.count[p ^ 1] != counts[p ^ 1] || pair.station != station;
+                } else {
+                    pair_differ += want != got || (got && (pair.count[0] != counts[0] || pair.count[1] != counts[1] || pair.station != station));
+                }
                 *pairs += got;
             }
             next_read += 100000;
@@ -869,6 +891,7 @@ int main(int argc, char **argv) {
 #endif
     MEASURED("declared divergence, weak matches: %u not confirmed, %u of which the frozen copy stored", _declared_weak, _declared_weak_stored);
     CHECK(_declared_wrong == 0, "declared divergence: every capture outside the declared classes compared, and every declared outcome held; %u did not", _declared_wrong);
+    MEASURED("declared divergence, pairs of one revolution: %u pair takes used a slot's previous count where the frozen copy's pair straddled two", _declared_pairs);
     MEASURED("declared divergence, explicit slot occupancy: %u captures stamped 0, or fed while a slot held one", _declared_s5);
     MEASURED("golden comparison: %u captures, %u differ; reference results stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u",
              _compared, _differ, _ref_results[0], _ref_results[1], _ref_results[2], _ref_results[3], _ref_results[4], _ref_results[5], _ref_results[6]);

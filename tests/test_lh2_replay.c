@@ -72,7 +72,7 @@ static void _resync(void) {
 static void test_fixture(const lh2_fixture_t *f) {
     lh2_ref_init(&_ref);
     db_lh2_decoder_init(&_dec);
-    uint32_t differ = 0, pairs = 0, pair_differ = 0, unconfirmed = 0;
+    uint32_t differ = 0, pairs = 0, pair_differ = 0, unconfirmed = 0, previous = 0;
     uint32_t next_read = f->count ? f->captures[0].t_us + 100000U : 0;
     for (size_t i = 0; i < f->count; i++) {
         db_lh2_capture_t cap;
@@ -107,13 +107,20 @@ static void test_fixture(const lh2_fixture_t *f) {
                     _ref.data_ready[1][station] = LH2_REF_NO_NEW_DATA;
                 }
                 pairs += took;
-                pair_differ += took != ref_ready || (took && (pair.count[0] != _ref.locations[0][station].lfsr_counts || pair.count[1] != _ref.locations[1][station].lfsr_counts));
+                if (took && ref_ready && pair.previous) {
+                    // declared: a slot's previous count makes the pair one revolution's
+                    previous++;
+                    uint8_t keep = (pair.previous & 1U) ? 1 : 0;
+                    pair_differ += pair.count[keep] != _ref.locations[keep][station].lfsr_counts;
+                } else {
+                    pair_differ += took != ref_ready || (took && (pair.count[0] != _ref.locations[0][station].lfsr_counts || pair.count[1] != _ref.locations[1][station].lfsr_counts));
+                }
             }
         }
     }
     CHECK(differ == 0 && pair_differ == 0, "E7 %s: the decoder and the frozen copy agree on every capture: %u of %zu differ, %u of %u pairs", f->name, differ, f->count, pair_differ, pairs);
-    printf("  lh2_replay: %s (%s): %zu captures, stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u, unconfirmed %u; %u pairs\n",
-           f->name, f->source, f->count, _dec.results[0], _dec.results[1], _dec.results[2], _dec.results[3], _dec.results[4], _dec.results[5], _dec.results[6], unconfirmed, pairs);
+    printf("  lh2_replay: %s (%s): %zu captures, stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u, unconfirmed %u; %u pairs, %u of them using a slot's previous count to stay in one revolution\n",
+           f->name, f->source, f->count, _dec.results[0], _dec.results[1], _dec.results[2], _dec.results[3], _dec.results[4], _dec.results[5], _dec.results[6], unconfirmed, pairs, previous);
 }
 
 static void test_record_layout(void) {

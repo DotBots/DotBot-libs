@@ -531,9 +531,10 @@ static uint8_t _select_sweep(db_lh2_decoder_t *dec, uint8_t polynomial, uint32_t
     for (size_t sweep = 0; sweep < 2; sweep++) {
         db_lh2_slot_t *slot = &dec->slot[sweep][basestation];
         if (slot->filled && now - slot->t_us > DB_LH2_STALE_US) {
-            slot->t_us   = 0;
-            slot->ready  = false;
-            slot->filled = false;
+            slot->t_us       = 0;
+            slot->ready      = false;
+            slot->filled     = false;
+            slot->prev_valid = false;
         }
     }
 
@@ -662,6 +663,9 @@ static db_lh2_decode_result_t _decode(db_lh2_decoder_t *dec, const db_lh2_captur
         return DB_LH2_DECODE_EQUAL_COUNTS;
     }
 
+    slot->prev_valid = slot->filled;
+    slot->prev_count = slot->count;
+    slot->prev_t_us  = slot->t_us;
     slot->t_us       = cap->t_us;
     slot->count      = temp_lfsr_loc;
     slot->polynomial = temp_selected_polynomial;
@@ -685,9 +689,10 @@ void db_lh2_decoder_init(db_lh2_decoder_t *dec) {
 void db_lh2_decoder_reset(db_lh2_decoder_t *dec) {
     for (uint8_t station = 0; station < DB_LH2_STATIONS; station++) {
         for (uint8_t sweep = 0; sweep < DB_LH2_SWEEPS; sweep++) {
-            dec->slot[sweep][station].ready  = false;
-            dec->slot[sweep][station].t_us   = 0;
-            dec->slot[sweep][station].filled = false;
+            dec->slot[sweep][station].ready      = false;
+            dec->slot[sweep][station].t_us       = 0;
+            dec->slot[sweep][station].filled     = false;
+            dec->slot[sweep][station].prev_valid = false;
         }
     }
 }
@@ -702,14 +707,49 @@ bool db_lh2_decoder_pair_ready(const db_lh2_decoder_t *dec, uint8_t station) {
     return station < DB_LH2_STATIONS && dec->slot[0][station].ready && dec->slot[1][station].ready;
 }
 
+/// Whether two sweeps are of one revolution: the smaller count first, stamped as far apart as the counts say
+static bool _one_revolution(uint32_t count_a, uint32_t t_a, uint32_t count_b, uint32_t t_b) {
+    if (count_a == count_b) {
+        return false;
+    }
+    bool     a_first = count_a < count_b;
+    int32_t  dt      = a_first ? (int32_t)(t_b - t_a) : (int32_t)(t_a - t_b);
+    uint32_t span    = a_first ? count_b - count_a : count_a - count_b;
+    int32_t  want    = (int32_t)((span + 3U) / 6U);  // 6 counts per us
+    int32_t  off     = dt - want;
+    return dt > 0 && off <= (int32_t)DB_LH2_SLOT_TOLERANCE_US && off >= -(int32_t)DB_LH2_SLOT_TOLERANCE_US;
+}
+
 bool db_lh2_decoder_take_pair(db_lh2_decoder_t *dec, uint8_t station, db_lh2_pair_t *out) {
     if (!db_lh2_decoder_pair_ready(dec, station)) {
         return false;
     }
-    out->station = station;
+    const db_lh2_slot_t *s0       = &dec->slot[0][station];
+    const db_lh2_slot_t *s1       = &dec->slot[1][station];
+    uint32_t             count[2] = { s0->count, s1->count };
+    uint32_t             t_us[2]  = { s0->t_us, s1->t_us };
+    uint8_t              previous = 0;
+    if (!_one_revolution(count[0], t_us[0], count[1], t_us[1])) {
+        // The pairs with one previous count; of those of one revolution, the later one
+        bool     ok0  = s0->prev_valid && _one_revolution(s0->prev_count, s0->prev_t_us, s1->count, s1->t_us);
+        bool     ok1  = s1->prev_valid && _one_revolution(s0->count, s0->t_us, s1->prev_count, s1->prev_t_us);
+        uint32_t end0 = ((int32_t)(s1->t_us - s0->prev_t_us) > 0) ? s1->t_us : s0->prev_t_us;
+        uint32_t end1 = ((int32_t)(s1->prev_t_us - s0->t_us) > 0) ? s1->prev_t_us : s0->t_us;
+        if (ok0 && (!ok1 || (int32_t)(end0 - end1) >= 0)) {
+            count[0] = s0->prev_count;
+            t_us[0]  = s0->prev_t_us;
+            previous = 1U << 0;
+        } else if (ok1) {
+            count[1] = s1->prev_count;
+            t_us[1]  = s1->prev_t_us;
+            previous = 1U << 1;
+        }
+    }
+    out->station  = station;
+    out->previous = previous;
     for (uint8_t sweep = 0; sweep < DB_LH2_SWEEPS; sweep++) {
-        out->count[sweep]               = dec->slot[sweep][station].count;
-        out->t_us[sweep]                = dec->slot[sweep][station].t_us;
+        out->count[sweep]               = count[sweep];
+        out->t_us[sweep]                = t_us[sweep];
         dec->slot[sweep][station].ready = false;
     }
     return true;

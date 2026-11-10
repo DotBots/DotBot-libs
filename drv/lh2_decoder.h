@@ -78,6 +78,9 @@ typedef struct {
     uint8_t  polynomial;  ///< its polynomial, of this slot's station; DB_LH2_POLYNOMIAL_NONE before the first
     bool     ready;       ///< a count stored and not yet taken
     bool     filled;      ///< a capture stored since the slot was last emptied; the slot choice reads this
+    uint32_t prev_count;  ///< the count this slot held before the last one, when prev_valid
+    uint32_t prev_t_us;   ///< its stamp
+    bool     prev_valid;  ///< the slot held a count before the last one, since it was last emptied
 } db_lh2_slot_t;
 
 /// Both sweeps of one station, as db_lh2_decoder_take_pair() hands them over
@@ -85,6 +88,7 @@ typedef struct {
     uint8_t  station;   ///< lh_index 0..15
     uint32_t count[2];  ///< slot 0 and slot 1
     uint32_t t_us[2];   ///< their capture stamps
+    uint8_t  previous;  ///< bit s: sweep s is its slot's previous count, paired to stay in one revolution
 } db_lh2_pair_t;
 
 /// The decoder, owned by the caller
@@ -136,7 +140,14 @@ db_lh2_decode_result_t db_lh2_decoder_feed(db_lh2_decoder_t *dec, const db_lh2_c
 bool db_lh2_decoder_pair_ready(const db_lh2_decoder_t *dec, uint8_t station);
 
 /**
- * @brief   Take both sweeps of a station when both are ready
+ * @brief   Take both sweeps of a station when both are ready, from one revolution
+ *
+ * Read between a revolution's two sweeps, one slot already holds the next
+ * revolution's sweep. Two sweeps are of one revolution when the one with the
+ * smaller count came first and their stamps are as far apart as their counts
+ * say, within DB_LH2_SLOT_TOLERANCE_US. When the two latest are not, a slot's
+ * previous count is used if that makes them so, the most recent such pair
+ * winning; when nothing does, the two latest are taken as they are.
  *
  * @param[in,out]  dec      the decoder
  * @param[in]      station  lh_index 0..15
