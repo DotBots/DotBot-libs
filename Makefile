@@ -200,9 +200,9 @@ $(TEST_BUILD_DIR)/test_lh2_select: $(LH2_SELECT_SRCS) $(LH2_SELECT_HDRS)
 CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c drv/lh2_fusion/lh2_fusion.c
 CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h drv/lh2_fusion.h drv/lh2_geometry.h
 
-$(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c $(CONTROL_SRCS) $(CONTROL_HDRS)
+$(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c tests/plant.c tests/plant.h $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
-	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_dotbot_control.c $(CONTROL_SRCS) -lm
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ tests/test_dotbot_control.c tests/plant.c $(CONTROL_SRCS) -lm
 
 $(TEST_BUILD_DIR)/test_dotbot_control_fleet: tests/test_dotbot_control_fleet.c wasm/dotbot_control_wasm.c wasm/dotbot_control_wasm.h $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
