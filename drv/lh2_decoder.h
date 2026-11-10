@@ -42,9 +42,13 @@
 #define DB_LH2_STALE_US          (2000000U)     ///< a slot older than this is emptied when its station is next decoded
 #define DB_LH2_SLOT_TOLERANCE_US (1000U)        ///< a capture joins a filled slot within this of its period grid
 
-/// Defined: the motion-capture check rejects captures that look like a
-/// Qualisys strobe, and the polynomial match tolerates no bit error
-#define LH2_MOCAP_FILTER 1
+/*
+ * Build option LH2_MOCAP_FILTER: defined (c_preprocessor_definitions in the
+ * project, -DLH2_MOCAP_FILTER on the host), every capture that looks like a
+ * Qualisys motion-capture strobe (db_lh2_mocap_interference()) is rejected
+ * before decoding, with DB_LH2_DECODE_MOCAP. Off by default: it also rejects
+ * a sweep whose light lasts under 8 us. Turn it on next to a Qualisys system.
+ */
 
 /// One capture of the TS4231 data line
 typedef struct {

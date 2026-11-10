@@ -60,9 +60,18 @@ static void test_fixture(const lh2_fixture_t *f) {
     for (size_t i = 0; i < f->count; i++) {
         db_lh2_capture_t cap;
         memcpy(cap.spi, f->captures[i].spi, DB_LH2_CAPTURE_BYTES);
-        cap.t_us                    = f->captures[i].t_us;
-        lh2_ref_result_t       want = lh2_ref_feed(&_ref, cap.spi, cap.t_us, cap.t_us);
-        db_lh2_decode_result_t got  = db_lh2_decoder_feed(&_dec, &cap, cap.t_us);
+        cap.t_us              = f->captures[i].t_us;
+        lh2_ref_result_t want = lh2_ref_feed(&_ref, cap.spi, cap.t_us, cap.t_us);
+#if !defined(LH2_MOCAP_FILTER)
+        if (want == LH2_REF_MOCAP) {
+            // declared: decoded like any other capture; the frozen copy's state did not move
+            db_lh2_decoder_t before = _dec;
+            differ += db_lh2_decoder_feed(&_dec, &cap, cap.t_us) == DB_LH2_DECODE_MOCAP;
+            _dec = before;
+            continue;
+        }
+#endif
+        db_lh2_decode_result_t got = db_lh2_decoder_feed(&_dec, &cap, cap.t_us);
         if ((int)got != (int)want || !_same_state()) {
             differ++;
         }

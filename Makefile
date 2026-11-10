@@ -128,7 +128,7 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_select $(TEST_BUILD_DIR)/test_lh2_scene $(TEST_BUILD_DIR)/test_lh2_replay
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_decoder_mocap $(TEST_BUILD_DIR)/test_lh2_select $(TEST_BUILD_DIR)/test_lh2_scene $(TEST_BUILD_DIR)/test_lh2_replay
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
@@ -138,6 +138,7 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_lh2_fusion
 	$(TEST_BUILD_DIR)/test_lh2_baseline
 	$(TEST_BUILD_DIR)/test_lh2_decoder
+	$(TEST_BUILD_DIR)/test_lh2_decoder_mocap
 	$(TEST_BUILD_DIR)/test_lh2_select
 	$(TEST_BUILD_DIR)/test_lh2_scene
 	$(TEST_BUILD_DIR)/test_lh2_replay
@@ -145,9 +146,10 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 
 # The full-size sweeps of the LH2 baseline and the decoder and selection comparisons: a million random
 # captures, the LFSR search over all 32 polynomials, and two million fixes
-test-long: $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_select
+test-long: $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_decoder_mocap $(TEST_BUILD_DIR)/test_lh2_select
 	$(TEST_BUILD_DIR)/test_lh2_baseline --long
 	$(TEST_BUILD_DIR)/test_lh2_decoder --long
+	$(TEST_BUILD_DIR)/test_lh2_decoder_mocap --long
 	$(TEST_BUILD_DIR)/test_lh2_select --long
 
 # Every host suite again, under AddressSanitizer and UndefinedBehaviorSanitizer
@@ -191,6 +193,11 @@ LH2_DECODER_HDRS = drv/lh2_decoder.h tests/lh2_reference.h tests/lh2_synth.h drv
 $(TEST_BUILD_DIR)/test_lh2_decoder: $(LH2_DECODER_SRCS) $(LH2_DECODER_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_DECODER_SRCS) -lm
+
+# The same comparison with the motion-capture check built in, as a build next to a Qualisys system has it
+$(TEST_BUILD_DIR)/test_lh2_decoder_mocap: $(LH2_DECODER_SRCS) $(LH2_DECODER_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -DLH2_MOCAP_FILTER -Itests -o $@ $(LH2_DECODER_SRCS) -lm
 
 # drv/lh2_select against the frozen swarmit a702520 choice, and PyDotBot's station-rule fixtures
 LH2_SELECT_SRCS = tests/test_lh2_select.c drv/lh2_select/lh2_select.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c tests/lh2_reference_select.c drv/lh2_geometry/lh2_geometry.c

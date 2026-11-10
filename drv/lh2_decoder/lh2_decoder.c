@@ -337,11 +337,6 @@ uint8_t db_lh2_polynomial(uint64_t chipsH1, int8_t *start_val) {
     uint64_t bits_to_compare                    = 0;
     int32_t  threshold                          = POLYNOMIAL_BIT_ERROR_INITIAL_THRESHOLD;
 
-#if defined(LH2_MOCAP_FILTER)
-    // tighten threshold if we expect MoCap interference
-    threshold = 0;
-#endif
-
     // A 17-bit seed from the word is run forward through every polynomial's
     // LFSR and compared with the bits that follow it. On a miss the seed moves
     // one bit later, or, already moved, back to bit 8 with 9 fewer bits compared.

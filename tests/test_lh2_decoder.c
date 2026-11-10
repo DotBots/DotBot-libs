@@ -126,12 +126,32 @@ static void _both_init(void) {
     db_lh2_decoder_init(&_dec);
 }
 
-/// One capture into both; false, and the case printed, on any difference
+/// Inputs in each class of declared divergence, and those whose outcome was not the declared one
+#if !defined(LH2_MOCAP_FILTER)
+static uint32_t _declared_mocap = 0;
+static uint32_t _declared_wrong = 0;
+#endif
+
+/// One capture into both; false, and the case printed, on any difference.
+/// Declared divergence, without LH2_MOCAP_FILTER: a capture the frozen copy
+/// rejects as motion capture is decoded like any other (the decoder's state
+/// is then put back, as the copy's never changed).
 static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uint8_t spi[DB_LH2_CAPTURE_BYTES], uint32_t t_us, uint32_t now_us) {
     db_lh2_capture_t cap;
     memcpy(cap.spi, spi, DB_LH2_CAPTURE_BYTES);
-    cap.t_us                       = t_us;
-    db_lh2_decode_result_t want    = _from_ref(lh2_ref_feed(&_ref, spi, t_us, now_us));
+    cap.t_us                    = t_us;
+    db_lh2_decode_result_t want = _from_ref(lh2_ref_feed(&_ref, spi, t_us, now_us));
+#if !defined(LH2_MOCAP_FILTER)
+    if (want == DB_LH2_DECODE_MOCAP) {
+        db_lh2_decoder_t before = _dec;
+        _declared_mocap++;
+        _declared_wrong += db_lh2_decoder_feed(&_dec, &cap, now_us) == DB_LH2_DECODE_MOCAP;
+        _dec = before;
+        _compared++;
+        _ref_results[want]++;
+        return true;
+    }
+#endif
     uint32_t               counted = _dec.results[want < DB_LH2_DECODE_RESULTS ? want : 0];
     db_lh2_decode_result_t got     = db_lh2_decoder_feed(&_dec, &cap, now_us);
     char                   buf[200];
@@ -512,6 +532,57 @@ static void test_golden_streams(void) {
     CHECK(_differ == before, "golden, streams: %u of %u captures or pair takes differ, %u pairs taken", _differ - before, _compared - start, pairs);
 }
 
+#if !defined(LH2_MOCAP_FILTER)
+/// Rows D6 and D7 with the motion-capture check off, the default: declared expectation changes
+static void test_d6_d7_mocap_off(void) {
+    lh2_synth_rng_t rng      = { 2606 };
+    const double    dwells[] = { 2, 4, 6, 7, 7.75, 8, 9, 12, 16 };
+    uint32_t        n = 2000, mocap = 0, wrong = 0;
+    uint32_t        ok[9] = { 0 };
+    for (uint32_t d = 0; d < sizeof(dwells) / sizeof(dwells[0]); d++) {
+        for (uint32_t i = 0; i < n; i++) {
+            lh2_synth_light_t light = _random_light(&rng);
+            light.dwell_us          = dwells[d];
+            light.idle_level        = (uint8_t)(lh2_synth_rand(&rng) >> 31);
+            db_lh2_capture_t cap    = { .t_us = 1000 };
+            lh2_synth_capture(&light, &rng, cap.spi);
+            db_lh2_decoder_t dec;
+            db_lh2_decoder_init(&dec);
+            db_lh2_decode_result_t r = db_lh2_decoder_feed(&dec, &cap, 1000);
+            mocap += r == DB_LH2_DECODE_MOCAP;
+            uint8_t station = light.polynomial >> 1;
+            bool    stored  = r == DB_LH2_DECODE_STORED;
+            uint8_t sweep   = dec.slot[0][station].ready ? 0 : 1;
+            int32_t e       = (int32_t)dec.slot[sweep][station].count - (int32_t)light.count;
+            if (stored && dec.slot[sweep][station].ready && e >= -2 && e <= 2) {
+                ok[d]++;
+            } else if (stored) {
+                wrong++;
+            }
+        }
+    }
+    MEASURED("D6 mocap check off: decoded right of %u at dwell 2, 4, 6, 7, 7.75, 8, 9, 12, 16 us: %u %u %u %u %u %u %u %u %u; %u wrong", n, ok[0], ok[1], ok[2], ok[3], ok[4], ok[5], ok[6], ok[7], ok[8], wrong);
+    CHECK(mocap == 0, "D6 (changed): nothing is rejected as motion capture, %u were", mocap);
+    // The shortest window needs 8 + 17 + 19 bits, about 7.3 us of light: dwells
+    // the filter rejected up to 7.75 us now decode from about 7 us on
+    CHECK(ok[1] == 0 && ok[3] > n / 20 && ok[4] > n * 80 / 100 && ok[5] > n * 90 / 100 && ok[8] > n * 99 / 100, "D6 (changed): decoded from the shortest dwell that carries enough bits: %u at 4 us, %u at 7 us, %u at 7.75 us, %u at 8 us, %u at 16 us", ok[1], ok[3], ok[4], ok[5], ok[8]);
+
+    // D7: a strobe is still never taken for a station's sweep
+    uint32_t strobe_stored = 0;
+    for (uint32_t period = 8; period <= 64; period += 8) {
+        for (uint32_t phase = 0; phase < period; phase++) {
+            db_lh2_capture_t cap = { .t_us = 1000 };
+            memset(cap.spi, 0, sizeof(cap.spi));
+            lh2_synth_mocap(cap.spi, period, phase);
+            db_lh2_decoder_t dec;
+            db_lh2_decoder_init(&dec);
+            strobe_stored += db_lh2_decoder_feed(&dec, &cap, 1000) == DB_LH2_DECODE_STORED;
+        }
+    }
+    CHECK(strobe_stored == 0, "D7: a strobe of any period from 0.5 to 4 MHz is never stored as a sweep, %u were", strobe_stored);
+}
+#endif
+
 static void test_counters(void) {
     db_lh2_decoder_t dec;
     db_lh2_decoder_init(&dec);
@@ -520,7 +591,11 @@ static void test_counters(void) {
     memcpy(cap.spi, zero, sizeof(zero));
     db_lh2_decoder_feed(&dec, &cap, 10);
     db_lh2_decoder_feed(&dec, &cap, 10);
+#if defined(LH2_MOCAP_FILTER)
     CHECK(dec.results[DB_LH2_DECODE_MOCAP] == 2 && dec.results[DB_LH2_DECODE_STORED] == 0, "two all-zero captures count as motion capture: %u", dec.results[DB_LH2_DECODE_MOCAP]);
+#else
+    CHECK(dec.results[DB_LH2_DECODE_NO_POLYNOMIAL] == 2 && dec.results[DB_LH2_DECODE_STORED] == 0, "two all-zero captures count as no polynomial: %u", dec.results[DB_LH2_DECODE_NO_POLYNOMIAL]);
+#endif
     CHECK(!db_lh2_decoder_pair_ready(&dec, 16), "no pair for a station out of range");
 }
 
@@ -598,10 +673,23 @@ int main(int argc, char **argv) {
     test_golden_impaired();
     test_golden_random();
     test_golden_streams();
+#if !defined(LH2_MOCAP_FILTER)
+    test_d6_d7_mocap_off();
+#endif
     test_counters();
     test_queue();
+#if defined(LH2_MOCAP_FILTER)
+    MEASURED("built with LH2_MOCAP_FILTER: the frozen copy's behaviour, every capture compared");
+#else
+    MEASURED("declared divergence, the motion-capture check off: %u captures the frozen copy rejects as mocap, %u of them rejected here too", _declared_mocap, _declared_wrong);
+    CHECK(_declared_wrong == 0, "declared divergence: a capture the frozen copy takes for motion capture is decoded like any other, %u were not", _declared_wrong);
+#endif
     MEASURED("golden comparison: %u captures, %u differ; reference results stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u",
              _compared, _differ, _ref_results[0], _ref_results[1], _ref_results[2], _ref_results[3], _ref_results[4], _ref_results[5], _ref_results[6]);
+#if defined(LH2_MOCAP_FILTER)
+    printf("lh2_decoder (mocap filter)%s: %d passed, %d failed\n", _long ? " (long)" : "", _passed, _failed);
+#else
     printf("lh2_decoder%s: %d passed, %d failed\n", _long ? " (long)" : "", _passed, _failed);
+#endif
     return _failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
