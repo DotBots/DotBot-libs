@@ -486,9 +486,11 @@ uint32_t db_lh2_lfsr_index(const db_lh2_decoder_t *dec, uint8_t index, uint32_t 
     // Return the found lfsr value
     if (success) {
         // Handle overflows
+        // Back into the sequence's 2^17 - 1 indices when the walk crossed its start
         if (count_final < 0) {
-            // wrap around the number
-            count_final += 131071;  // 2^17 -1 (the full lenght of the sequence)
+            count_final += 131071;
+        } else if (count_final >= 131071) {
+            count_final -= 131071;
         }
         // Turn result back to unsigned before returning
         return (uint32_t)count_final;

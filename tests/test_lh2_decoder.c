@@ -336,6 +336,7 @@ static void test_tables(void) {
             uint32_t word  = db_lh2_checkpoints[p][i];
             uint32_t index = word >> 11;
             uint32_t state = ((uint32_t)i << 11) | (word & 0x7FFU);
+            // The full-range tables differ from the frozen copy's by design; count how many
             wrong_index += index != lh2_ref_static_checkpoint(p, i);
             wrong_state += state != lh2_ref_static_checkpoint_state(p, i);
             last = (index > last) ? index : last;
@@ -352,7 +353,27 @@ static void test_tables(void) {
         }
     }
     CHECK(wrong_poly == 0, "polynomials equal to the reference's: %u differ", wrong_poly);
-    CHECK(wrong_index == 0 && wrong_state == 0, "packed checkpoints unpack to the reference's index and state tables: %u indices, %u states differ", wrong_index, wrong_state);
+    MEASURED("static checkpoints: %u of 2048 moved from the frozen copy's tables (which end at count 108,325) to cover the revolution", wrong_index);
+    (void)wrong_state;
+    // The longest walk from any count of a revolution to the nearest static checkpoint, either way round
+    uint32_t worst = 0;
+    for (uint8_t p = 0; p < DB_LH2_POLYNOMIALS; p++) {
+        if (!_long && p != 0 && p != 19) {
+            continue;
+        }
+        uint32_t revolution = db_lh2_period(0) / DB_LH2_PERIOD_TICKS_PER_COUNT;
+        for (uint32_t n = 0; n < revolution; n++) {
+            uint32_t best = UINT32_MAX;
+            for (uint8_t i = 0; i < DB_LH2_CHECKPOINTS; i++) {
+                uint32_t at = db_lh2_checkpoints[p][i] >> 11;
+                uint32_t d  = (at > n) ? at - n : n - at;
+                d           = (d < LH2_SYNTH_LFSR_PERIOD - d) ? d : LH2_SYNTH_LFSR_PERIOD - d;
+                best        = (d < best) ? d : best;
+            }
+            worst = (best > worst) ? best : worst;
+        }
+    }
+    CHECK(worst <= 940, "D11 (changed): no count of a revolution is more than 940 steps from a static checkpoint, %u was (11,406 in the frozen copy's tables)", worst);
     CHECK(wrong_lfsr == 0, "every packed checkpoint is the LFSR state at its index: %u wrong", wrong_lfsr);
     CHECK(sizeof(db_lh2_checkpoints) == 8192, "the static checkpoints take 8 KiB: %zu B", sizeof(db_lh2_checkpoints));
 }
@@ -428,9 +449,10 @@ static void test_lfsr_index_every_position(void) {
     CHECK(differ == 0, "cold LFSR search identical at every index: %u of %u differ", differ, searched);
 
     // with random dynamic checkpoints, and states that are not on the sequence
-    lh2_synth_rng_t rng = { 4003 };
-    differ              = 0;
-    uint32_t n          = _long ? 200000 : 20000;
+    lh2_synth_rng_t rng            = { 4003 };
+    uint32_t        garbage_differ = 0;
+    differ                         = 0;
+    uint32_t n                     = _long ? 200000 : 20000;
     for (uint32_t i = 0; i < n; i++) {
         uint8_t p = (uint8_t)(lh2_synth_rand(&rng) >> 27);
         for (uint8_t s = 0; s < DB_LH2_SWEEPS; s++) {
@@ -439,9 +461,15 @@ static void test_lfsr_index_every_position(void) {
             cold.checkpoint_count[p][s] = ref_cold.count[p][s] = (i % 4 == 0) ? lh2_synth_rand(&rng) : at;
         }
         uint32_t bits = (i % 10 == 0) ? (lh2_synth_rand(&rng) & 0x1FFFFU) : lh2_synth_lfsr_state(p, lh2_synth_rand(&rng) % LH2_SYNTH_LFSR_PERIOD);
-        differ += db_lh2_lfsr_index(&cold, p, bits) != lh2_ref_lfsr_index_search(&ref_cold, p, bits);
+        // A dynamic checkpoint whose count is not its state's index never comes out of a search;
+        // with one, which checkpoint the walk meets first decides, and the tables moved
+        bool garbage = i % 4 == 0;
+        bool d       = db_lh2_lfsr_index(&cold, p, bits) != lh2_ref_lfsr_index_search(&ref_cold, p, bits);
+        differ += d && !garbage;
+        garbage_differ += d && garbage;
     }
-    CHECK(differ == 0, "LFSR search with dynamic checkpoints identical: %u of %u differ", differ, n);
+    CHECK(differ == 0, "LFSR search with consistent dynamic checkpoints identical: %u of %u differ", differ, n * 3 / 4);
+    MEASURED("LFSR search with a dynamic checkpoint whose count is not its index (never written by a search): %u of %u differ", garbage_differ, n / 4);
 }
 
 static void test_golden_clean(void) {
