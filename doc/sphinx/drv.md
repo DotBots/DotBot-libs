@@ -21,6 +21,7 @@ _api/drv_ism330
 _api/drv_lh2_decoder
 _api/drv_lh2_fusion
 _api/drv_lh2_geometry
+_api/drv_lh2_select
 _api/drv_lis2mdl
 _api/drv_lis3mdl
 _api/drv_log_flash
