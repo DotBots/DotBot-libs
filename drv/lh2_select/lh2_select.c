@@ -45,6 +45,17 @@ void db_lh2_select_conf_load(db_lh2_select_conf_t *conf, uint32_t station_mask, 
         memcpy(conf->homography[station], homographies[station], sizeof(conf->homography[0]));
     }
     conf->station_mask = (uint16_t)station_mask;
+    conf->margin_mm    = DB_LH2_SELECT_MARGIN_MM;
+    conf->hold_station = true;
+}
+
+void db_lh2_select_state_init(db_lh2_select_state_t *state) {
+    state->kept   = -1;
+    state->inside = 0;
+}
+
+void db_lh2_select_end(db_lh2_select_state_t *state, const db_lh2_fix_t *fix) {
+    state->kept = fix->found ? (int8_t)fix->station : -1;
 }
 
 void db_lh2_select_begin(db_lh2_fix_t *fix) {
@@ -69,7 +80,13 @@ bool db_lh2_select_offer_solve(db_lh2_fix_t *fix, uint8_t station, double x, dou
     return true;
 }
 
-db_lh2_select_result_t db_lh2_select_offer_pair(const db_lh2_select_conf_t *conf, db_lh2_fix_t *fix, db_lh2_lines_t *lines, const db_lh2_pair_t *pair, double xy_mm[2]) {
+/// Inside rect grown by margin on every side, in single precision: it only keeps lines
+static bool _within(const uint32_t rect[DB_LH2_SELECT_RECT_LEN], double x, double y, uint16_t margin) {
+    float fx = (float)x, fy = (float)y, m = (float)margin;
+    return fx >= (float)rect[0] - m && fx <= (float)rect[2] + m && fy >= (float)rect[1] - m && fy <= (float)rect[3] + m;
+}
+
+db_lh2_select_result_t db_lh2_select_offer_pair(const db_lh2_select_conf_t *conf, db_lh2_select_state_t *state, db_lh2_fix_t *fix, db_lh2_lines_t *lines, const db_lh2_pair_t *pair, double xy_mm[2]) {
     uint8_t station = pair->station;
     if (station >= DB_LH2_SELECT_STATIONS || ((conf->station_mask >> station) & 1U) == 0) {
         xy_mm[0] = NAN;
@@ -77,15 +94,29 @@ db_lh2_select_result_t db_lh2_select_offer_pair(const db_lh2_select_conf_t *conf
         return DB_LH2_SELECT_UNCALIBRATED;
     }
     db_lh2_solve(pair->count[0], pair->count[1], station, conf->homography[station], xy_mm);
-    double x = xy_mm[0];
-    double y = xy_mm[1];
+    double   x   = xy_mm[0];
+    double   y   = xy_mm[1];
+    uint16_t bit = (uint16_t)(1U << station);
     if (!isfinite(x) || !isfinite(y)) {
+        state->inside &= (uint16_t)~bit;
         return DB_LH2_SELECT_NOT_FINITE;
     }
-    if (!db_lh2_select_rect_contains(conf->rect_mm[station], x, y)) {
+    const uint32_t *rect   = conf->rect_mm[station];
+    bool            strict = db_lh2_select_rect_contains(rect, x, y);
+    if (!strict && !(conf->margin_mm > 0 && (state->inside & bit) && _within(rect, x, y, conf->margin_mm))) {
+        state->inside &= (uint16_t)~bit;
         return DB_LH2_SELECT_OUTSIDE;
     }
-    bool                kept = db_lh2_select_offer_solve(fix, station, x, y, conf->rect_mm[station]);
+    state->inside |= bit;
+    // Only a solve inside the rectangle itself can be the fix; the margin keeps lines only
+    bool kept = false;
+    if (strict && conf->hold_station && state->kept == (int8_t)station) {
+        db_lh2_select_begin(fix);
+        kept      = db_lh2_select_offer_solve(fix, station, x, y, rect);
+        fix->held = true;
+    } else if (strict && !fix->held) {
+        kept = db_lh2_select_offer_solve(fix, station, x, y, rect);
+    }
     db_lh2_floor_line_t pair_lines[2];
     if (db_lh2_sweep_lines(pair->count[0], pair->count[1], station, conf->homography[station], pair_lines) == 2) {
         db_lh2_lines_push(lines, pair_lines);
@@ -93,12 +124,13 @@ db_lh2_select_result_t db_lh2_select_offer_pair(const db_lh2_select_conf_t *conf
     return kept ? DB_LH2_SELECT_KEPT : DB_LH2_SELECT_INSIDE;
 }
 
-bool db_lh2_select_fix(const db_lh2_select_conf_t *conf, const db_lh2_pair_t *pairs, uint8_t n, db_lh2_fix_t *fix, db_lh2_lines_t *lines) {
+bool db_lh2_select_fix(const db_lh2_select_conf_t *conf, db_lh2_select_state_t *state, const db_lh2_pair_t *pairs, uint8_t n, db_lh2_fix_t *fix, db_lh2_lines_t *lines) {
     db_lh2_select_begin(fix);
     for (uint8_t i = 0; i < n; i++) {
         double xy[2];
-        db_lh2_select_offer_pair(conf, fix, lines, &pairs[i], xy);
+        db_lh2_select_offer_pair(conf, state, fix, lines, &pairs[i], xy);
     }
+    db_lh2_select_end(state, fix);
     return fix->found;
 }
 

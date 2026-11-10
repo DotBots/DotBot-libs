@@ -61,24 +61,25 @@ static int _passed = 0;
 //=========================== the scene ========================================
 
 typedef struct {
-    plant_t              plant;
-    db_control_t         control;
-    db_control_output_t  out;
-    lh2_scene_station_t  st[4];
-    uint8_t              n;
-    db_lh2_decoder_t     dec;
-    db_lh2_queue_t       queue;
-    db_lh2_select_conf_t conf;
-    db_lh2_lines_t       lines;
-    lh2_synth_rng_t      rng;
-    uint64_t             base_us;
-    double               t_us;
-    uint32_t             fix_sequence;
-    uint32_t             fix_x;
-    uint32_t             fix_y;
-    bool                 open_loop;  ///< the plant runs on pwm_left and pwm_right, not on the control core
-    int8_t               pwm_left;
-    int8_t               pwm_right;
+    plant_t               plant;
+    db_control_t          control;
+    db_control_output_t   out;
+    lh2_scene_station_t   st[4];
+    uint8_t               n;
+    db_lh2_decoder_t      dec;
+    db_lh2_queue_t        queue;
+    db_lh2_select_conf_t  conf;
+    db_lh2_select_state_t select;
+    db_lh2_lines_t        lines;
+    lh2_synth_rng_t       rng;
+    uint64_t              base_us;
+    double                t_us;
+    uint32_t              fix_sequence;
+    uint32_t              fix_x;
+    uint32_t              fix_y;
+    bool                  open_loop;  ///< the plant runs on pwm_left and pwm_right, not on the control core
+    int8_t                pwm_left;
+    int8_t                pwm_right;
     // the last read, for the rows to inspect
     bool          read;        ///< this tick read a fix
     db_lh2_fix_t  fix;         ///< the fix that read built
@@ -140,6 +141,7 @@ static void _scene_init(scene_t *s, float x, float y, uint64_t base_us, uint32_t
     db_lh2_select_conf_load(&s->conf, (1U << STATION_A) | (1U << STATION_B), (const float(*)[3][3])h, (const uint32_t(*)[DB_LH2_SELECT_RECT_LEN])rects);
     db_lh2_decoder_init(&s->dec);
     db_lh2_queue_clear(&s->queue);
+    db_lh2_select_state_init(&s->select);
     db_lh2_lines_init(&s->lines);
     _record(s);
 }
@@ -158,8 +160,9 @@ static void _read_fix(scene_t *s, db_control_input_t *in) {
             s->pair[s->pairs++] = pair;
         }
         double xy[2];
-        db_lh2_select_offer_pair(&s->conf, &s->fix, &s->lines, &pair, xy);
+        db_lh2_select_offer_pair(&s->conf, &s->select, &s->fix, &s->lines, &pair, xy);
     }
+    db_lh2_select_end(&s->select, &s->fix);
     if (s->fix.found) {
         s->fix_sequence++;
         s->fix_x = (uint32_t)s->fix.x_mm;
@@ -378,6 +381,43 @@ static void test_e2_drive_and_l8_speed(void) {
     CHECK(d.n_same + d.n_mixed >= 25 && d.est_max < 15.0, "E2: spinning in place, the estimator tracks within 15 mm: %.1f mm", d.est_max);
 }
 
+/// Row L4 as DBK-186 saw it: two stations given the same rectangle, disagreeing
+/// by 3 mm, the robot rocking by a millimetre where their solves are as far from its centre
+static void test_l4_equal_rectangles(void) {
+    uint32_t switches[2] = { 0, 0 }, reads[2] = { 0, 0 };
+    for (uint8_t rules = 0; rules < 2; rules++) {
+        scene_t *s = &_s;
+        _scene_init(s, 998.5f, 1000.0f - DB_LH2_LEVER_ARM_EFFECTIVE, 0, 81);
+        for (uint8_t i = 0; i < s->n; i++) {
+            uint32_t extent[4] = { 0, 0, 2000, 2000 };
+            memcpy(s->conf.rect_mm[s->st[i].station], extent, sizeof(extent));
+        }
+        s->conf.homography[STATION_B][0][2] += 3.0f;
+        if (!rules) {
+            s->conf.margin_mm    = 0;
+            s->conf.hold_station = false;
+        }
+        int last = -1;
+        for (int i = 0; i < 600; i++) {
+            // the robot rocks by about a millimetre across where the two solves are as far from the centre
+            float dx   = 1.2f * sinf((float)i * 0.37f);
+            s->plant.x = 998.5f + dx;
+            for (unsigned k = 0; k <= PLANT_FIX_AGE; k++) {
+                s->plant.px[k] = 998.5f + dx;
+            }
+            _tick(s);
+            if (s->read && s->fix.found) {
+                reads[rules]++;
+                switches[rules] += last >= 0 && last != s->fix.station;
+                last = s->fix.station;
+            }
+        }
+    }
+    CHECK(switches[0] > reads[0] / 10, "L4 (rules off, today): the fix switches station from read to read: %u switches in %u fixes", switches[0], reads[0]);
+    CHECK(switches[1] == 0 && reads[1] >= 55, "L4 (changed): with the hold, no switch while the kept station stays inside: %u in %u fixes", switches[1], reads[1]);
+    MEASURED("L4 equal rectangles, stations 3 mm apart, robot rocking 1.2 mm where both solves are as far from the centre: %u station switches in %u fixes today, %u with the hold", switches[0], reads[0], switches[1]);
+}
+
 static void test_e3_station_dark(void) {
     scene_t *s = &_s;
     _scene_init(s, 1000, 1000, 0, 41);
@@ -516,6 +556,7 @@ int main(void) {
     test_scene_round_trip();
     test_e1_at_rest();
     test_e2_drive_and_l8_speed();
+    test_l4_equal_rectangles();
     test_e3_station_dark();
     test_e4_late_duplicate();
     test_e5_moved();

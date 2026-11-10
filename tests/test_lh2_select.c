@@ -163,9 +163,10 @@ static void _random_rect(double x, double y, const uint32_t extent[4], uint32_t 
 
 //=========================== the two sides ====================================
 
-static db_lh2_decoder_t     _dec;
-static db_lh2_select_conf_t _conf;
-static db_lh2_lines_t       _lines;
+static db_lh2_decoder_t      _dec;
+static db_lh2_select_conf_t  _conf;
+static db_lh2_select_state_t _state;
+static db_lh2_lines_t        _lines;
 
 /// What swarmit's localization_get_position() does with the module
 static bool _new_get_position(db_lh2_fix_t *fix, uint32_t *x, uint32_t *y) {
@@ -175,7 +176,7 @@ static bool _new_get_position(db_lh2_fix_t *fix, uint32_t *x, uint32_t *y) {
     }
     db_lh2_pair_t pairs[DB_LH2_STATIONS];
     uint8_t       n = db_lh2_select_take_pairs(&_dec, pairs, DB_LH2_STATIONS);
-    if (!db_lh2_select_fix(&_conf, pairs, n, fix, &_lines)) {
+    if (!db_lh2_select_fix(&_conf, &_state, pairs, n, fix, &_lines)) {
         return false;
     }
     *x = (uint32_t)fix->x_mm;
@@ -209,6 +210,7 @@ static void _clear_both(void) {
     lh2_ref_select_clear();
     db_lh2_decoder_init(&_dec);
     memset(&_conf, 0, sizeof(_conf));
+    db_lh2_select_state_init(&_state);
     db_lh2_lines_init(&_lines);
 }
 
@@ -291,6 +293,9 @@ static void _compare_raw(void) {
 static void _load(uint32_t mask, float h[16][3][3], uint32_t rects[16][4]) {
     lh2_ref_select_init(h, mask, (const uint32_t(*)[4])rects);
     db_lh2_select_conf_load(&_conf, mask, (const float(*)[3][3])h, (const uint32_t(*)[4])rects);
+    // The hold and the line margin off: the frozen copy's choice, compared bit for bit
+    _conf.margin_mm    = 0;
+    _conf.hold_station = false;
 }
 
 static void test_golden(void) {
@@ -451,6 +456,8 @@ static void test_l2_edges_and_non_finite(void) {
     db_lh2_select_conf_t conf = { 0 };
     db_lh2_lines_t       lines;
     db_lh2_lines_init(&lines);
+    db_lh2_select_state_t st;
+    db_lh2_select_state_init(&st);
     float    h[16][3][3];
     uint32_t rects[16][4];
     _plain_homography(h[0], 1000, 2000, 2000);
@@ -462,12 +469,12 @@ static void test_l2_edges_and_non_finite(void) {
     db_lh2_pair_t p0 = _pair(0, 50000, 60000), p1 = _pair(1, 50000, 60000);
     double        xy[2];
     db_lh2_select_begin(&fix);
-    CHECK(db_lh2_select_offer_pair(&conf, &fix, &lines, &p0, xy) == DB_LH2_SELECT_OUTSIDE && lines.count == 0, "L2: a finite solve outside its rectangle is dropped, no line");
-    CHECK(db_lh2_select_offer_pair(&conf, &fix, &lines, &p1, xy) == DB_LH2_SELECT_NOT_FINITE && lines.count == 0 && !fix.found, "L2: a zero homography solves to NaN, dropped, no line");
+    CHECK(db_lh2_select_offer_pair(&conf, &st, &fix, &lines, &p0, xy) == DB_LH2_SELECT_OUTSIDE && lines.count == 0, "L2: a finite solve outside its rectangle is dropped, no line");
+    CHECK(db_lh2_select_offer_pair(&conf, &st, &fix, &lines, &p1, xy) == DB_LH2_SELECT_NOT_FINITE && lines.count == 0 && !fix.found, "L2: a zero homography solves to NaN, dropped, no line");
     _plain_homography(conf.homography[1], 1000, 2000, 2000);
     conf.homography[1][1][0] = NAN;
-    db_lh2_select_offer_pair(&conf, &fix, &lines, &p1, xy);
-    CHECK(isfinite(xy[0]) && isnan(xy[1]) && db_lh2_select_offer_pair(&conf, &fix, &lines, &p1, xy) == DB_LH2_SELECT_NOT_FINITE, "L2: a NaN y alone is reported not finite");
+    db_lh2_select_offer_pair(&conf, &st, &fix, &lines, &p1, xy);
+    CHECK(isfinite(xy[0]) && isnan(xy[1]) && db_lh2_select_offer_pair(&conf, &st, &fix, &lines, &p1, xy) == DB_LH2_SELECT_NOT_FINITE, "L2: a NaN y alone is reported not finite");
 }
 
 static void test_l3_nearest_centre(void) {
@@ -516,36 +523,100 @@ static void test_l5_switch_back(void) {
 }
 
 static void test_l6_jitter_on_edge(void) {
-    db_lh2_select_conf_t conf = { 0 };
-    db_lh2_lines_t       lines;
-    db_lh2_lines_init(&lines);
     float    h[16][3][3];
     uint32_t rects[16][4];
     _plain_homography(h[0], 1000, 2000, 2000);
     db_lh2_pair_t p = _pair(0, 50000, 60000);
     double        xy[2];
     db_lh2_solve(p.count[0], p.count[1], 0, (const float(*)[3])h[0], xy);
-    // The rectangle's x_max on the solve: a count either way moves it across
-    rects[0][0] = 0;
-    rects[0][1] = 0;
-    rects[0][2] = (uint32_t)floor(xy[0]);
-    rects[0][3] = 100000;
-    db_lh2_select_conf_load(&conf, 0x1, (const float(*)[3][3])h, (const uint32_t(*)[4])rects);
-    uint32_t in = 0, out = 0;
-    for (int i = 0; i < 400; i++) {
-        db_lh2_pair_t q = _pair(0, p.count[0] + _below(61) - 30, p.count[1] + _below(61) - 30);
-        db_lh2_fix_t  fix;
-        db_lh2_select_begin(&fix);
-        db_lh2_floor_line_t drained[DB_LH2_SELECT_LINES_MAX];
-        db_lh2_lines_drain(&lines, drained, DB_LH2_SELECT_LINES_MAX);
-        db_lh2_select_offer_pair(&conf, &fix, &lines, &q, xy);
-        if (lines.count) {
-            in++;
-        } else {
-            out++;
+    // The rectangle's x_max on the solve: a few counts either way move it across
+    rects[0][0]    = 0;
+    rects[0][1]    = 0;
+    rects[0][2]    = (uint32_t)floor(xy[0]);
+    rects[0][3]    = 100000;
+    uint32_t in[2] = { 0, 0 }, toggles[2] = { 0, 0 };
+    double   spread = 0;
+    uint32_t saved  = _seed;
+    for (uint8_t rules = 0; rules < 2; rules++) {
+        db_lh2_select_conf_t conf = { 0 };
+        db_lh2_select_conf_load(&conf, 0x1, (const float(*)[3][3])h, (const uint32_t(*)[4])rects);
+        if (!rules) {
+            conf.margin_mm    = 0;
+            conf.hold_station = false;
+        }
+        db_lh2_select_state_t st;
+        db_lh2_select_state_init(&st);
+        db_lh2_lines_t lines;
+        db_lh2_lines_init(&lines);
+        _seed     = 6606;
+        bool last = false;
+        for (int i = 0; i < 400; i++) {
+            db_lh2_pair_t q = _pair(0, p.count[0] + _below(61) - 30, p.count[1] + _below(61) - 30);
+            db_lh2_fix_t  fix;
+            db_lh2_select_begin(&fix);
+            db_lh2_floor_line_t drained[DB_LH2_SELECT_LINES_MAX];
+            db_lh2_lines_drain(&lines, drained, DB_LH2_SELECT_LINES_MAX);
+            db_lh2_select_offer_pair(&conf, &st, &fix, &lines, &q, xy);
+            db_lh2_select_end(&st, &fix);
+            spread   = fmax(spread, fabs(xy[0] - rects[0][2]));
+            bool now = lines.count > 0;
+            in[rules] += now;
+            toggles[rules] += i > 0 && now != last;
+            last = now;
         }
     }
-    CHECK(in > 20 && out > 20, "L6 (today): a solve jittering on an edge puts its lines in and out: in %u, out %u of 400", in, out);
+    _seed = saved;
+    CHECK(in[0] > 20 && toggles[0] > 20, "L6 (rules off, today): a solve jittering on an edge puts its lines in and out: in %u of 400, %u toggles", in[0], toggles[0]);
+    CHECK(spread < DB_LH2_SELECT_MARGIN_MM && toggles[1] <= 1, "L6 (changed): with the margin, once in they stay in: %u toggles, the solve within %.1f mm of the edge", toggles[1], spread);
+}
+
+/// Station s's homography moved so that _pair(s, 50000, 60000) solves to (x, y)
+static void _solve_at(db_lh2_select_conf_t *conf, uint8_t s, double x, double y) {
+    double cam[2];
+    db_lh2_camera_point(50000, 60000, s, cam);
+    _plain_homography(conf->homography[s], 1000, (float)(x - 1000.0 * cam[0]), (float)(y - 1000.0 * cam[1]));
+}
+
+static void test_l4_l5_hold(void) {
+    float    h[16][3][3];
+    uint32_t rects[16][4];
+    memset(h, 0, sizeof(h));
+    uint32_t ext[4] = { 0, 0, 1000, 1000 };
+    memcpy(rects[0], ext, sizeof(ext));
+    memcpy(rects[1], ext, sizeof(ext));
+    db_lh2_select_conf_t conf;
+    db_lh2_select_conf_load(&conf, 0x3, (const float(*)[3][3])h, (const uint32_t(*)[4])rects);
+    db_lh2_select_state_t st;
+    db_lh2_select_state_init(&st);
+    db_lh2_lines_t lines;
+    db_lh2_lines_init(&lines);
+    db_lh2_pair_t pairs[2] = { _pair(0, 50000, 60000), _pair(1, 50000, 60000) };
+    uint32_t      flips = 0, last = 99;
+    for (int i = 0; i < 200; i++) {
+        double x = 500 + 3.0 * sin(i * 0.3);
+        _solve_at(&conf, 0, x - 1.0, 500);
+        _solve_at(&conf, 1, x + 1.0, 500);
+        db_lh2_fix_t fix;
+        db_lh2_select_fix(&conf, &st, pairs, 2, &fix, &lines);
+        flips += last != 99 && fix.station != last;
+        last = fix.station;
+    }
+    CHECK(flips == 0, "L4 (changed): equal rectangles no longer flip the station while it stays inside: %u flips in 200 fixes", flips);
+
+    // L5: station 0 drops out, 1 takes over; 0 returns nearer its centre, 1 stays while inside
+    uint32_t b[4] = { 200, 0, 1200, 1000 };
+    memcpy(conf.rect_mm[1], b, sizeof(b));
+    db_lh2_select_state_init(&st);
+    db_lh2_fix_t fix;
+    _solve_at(&conf, 0, 550, 500);
+    _solve_at(&conf, 1, 550, 500);
+    db_lh2_select_fix(&conf, &st, &pairs[1], 1, &fix, &lines);
+    bool one = fix.station == 1;
+    db_lh2_select_fix(&conf, &st, pairs, 2, &fix, &lines);
+    CHECK(one && fix.station == 1 && fix.held, "L5 (changed): station 0 back and nearer its centre, the fix stays on 1: LH%u", fix.station);
+    _solve_at(&conf, 1, 1300, 500);
+    db_lh2_select_fix(&conf, &st, pairs, 2, &fix, &lines);
+    CHECK(fix.station == 0 && !fix.held, "L5 (changed): once 1's solve leaves its rectangle, 0 takes over: LH%u", fix.station);
 }
 
 static void test_l7_uncalibrated_taken_not_solved(void) {
@@ -559,19 +630,23 @@ static void test_l7_uncalibrated_taken_not_solved(void) {
     conf.station_mask         = 0x1;
     db_lh2_lines_t lines;
     db_lh2_lines_init(&lines);
+    db_lh2_select_state_t st;
+    db_lh2_select_state_init(&st);
     db_lh2_pair_t pairs[16];
     uint8_t       n = db_lh2_select_take_pairs(&dec, pairs, 16);
     db_lh2_fix_t  fix;
     double        xy[2];
     db_lh2_select_begin(&fix);
     CHECK(n == 1 && !db_lh2_decoder_pair_ready(&dec, 5), "L7: an uncalibrated station's pair is taken, so never stale");
-    CHECK(db_lh2_select_offer_pair(&conf, &fix, &lines, &pairs[0], xy) == DB_LH2_SELECT_UNCALIBRATED && isnan(xy[0]) && !fix.found && lines.count == 0, "L7: but not solved");
+    CHECK(db_lh2_select_offer_pair(&conf, &st, &fix, &lines, &pairs[0], xy) == DB_LH2_SELECT_UNCALIBRATED && isnan(xy[0]) && !fix.found && lines.count == 0, "L7: but not solved");
 }
 
 static void test_l9_singular_homography(void) {
     db_lh2_select_conf_t conf = { 0 };
     db_lh2_lines_t       lines;
     db_lh2_lines_init(&lines);
+    db_lh2_select_state_t st;
+    db_lh2_select_state_init(&st);
     float    h[16][3][3];
     uint32_t rects[16][4];
     _plain_homography(h[0], 1000, 2000, 2000);
@@ -584,7 +659,7 @@ static void test_l9_singular_homography(void) {
     db_lh2_select_conf_load(&conf, 0x3, (const float(*)[3][3])h, (const uint32_t(*)[4])rects);
     db_lh2_pair_t pairs[2] = { _pair(0, 50000, 60000), _pair(1, 50000, 60000) };
     db_lh2_fix_t  fix;
-    CHECK(!db_lh2_select_fix(&conf, pairs, 2, &fix, &lines) && lines.count == 0, "L9: a singular or NaN homography gives no solve and no line");
+    CHECK(!db_lh2_select_fix(&conf, &st, pairs, 2, &fix, &lines) && lines.count == 0, "L9: a singular or NaN homography gives no solve and no line");
 }
 
 static void test_l10_ring(void) {
@@ -816,6 +891,7 @@ int main(int argc, char **argv) {
     test_l4_equal_rectangles_flip();
     test_l5_switch_back();
     test_l6_jitter_on_edge();
+    test_l4_l5_hold();
     test_l7_uncalibrated_taken_not_solved();
     test_l9_singular_homography();
     test_l10_ring();

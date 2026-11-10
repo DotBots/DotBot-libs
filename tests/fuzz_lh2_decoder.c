@@ -53,6 +53,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     db_lh2_select_conf_load(&conf, 0xFFFF, (const float(*)[3][3])h, (const uint32_t(*)[DB_LH2_SELECT_RECT_LEN])rects);
     db_lh2_lines_t lines;
     db_lh2_lines_init(&lines);
+    db_lh2_select_state_t state;
+    db_lh2_select_state_init(&state);
 
     for (size_t off = 0; off + RECORD <= size; off += RECORD) {
         db_lh2_capture_t cap;
@@ -66,7 +68,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             db_lh2_pair_t pairs[DB_LH2_STATIONS];
             db_lh2_fix_t  fix;
             uint8_t       n = db_lh2_select_take_pairs(&dec, pairs, DB_LH2_STATIONS);
-            if (db_lh2_select_fix(&conf, pairs, n, &fix, &lines) && !db_lh2_select_rect_contains(conf.rect_mm[fix.station], fix.x_mm, fix.y_mm)) {
+            if (db_lh2_select_fix(&conf, &state, pairs, n, &fix, &lines) && !db_lh2_select_rect_contains(conf.rect_mm[fix.station], fix.x_mm, fix.y_mm)) {
                 abort();
             }
             db_lh2_floor_line_t out[DB_LH2_SELECT_LINES_MAX];
