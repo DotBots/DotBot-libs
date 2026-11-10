@@ -128,7 +128,7 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_select $(TEST_BUILD_DIR)/test_lh2_scene
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_select $(TEST_BUILD_DIR)/test_lh2_scene $(TEST_BUILD_DIR)/test_lh2_replay
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
@@ -140,6 +140,8 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_lh2_decoder
 	$(TEST_BUILD_DIR)/test_lh2_select
 	$(TEST_BUILD_DIR)/test_lh2_scene
+	$(TEST_BUILD_DIR)/test_lh2_replay
+	python3 dist/scripts/lh2/lh2_capture.py --self-test
 
 # The full-size sweeps of the LH2 baseline and the decoder and selection comparisons: a million random
 # captures, the LFSR search over all 32 polynomials, and two million fixes
@@ -205,6 +207,14 @@ LH2_SCENE_HDRS = tests/lh2_scene.h tests/lh2_synth.h tests/plant.h drv/lh2_selec
 $(TEST_BUILD_DIR)/test_lh2_scene: $(LH2_SCENE_SRCS) $(LH2_SCENE_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_SCENE_SRCS) -lm
+
+# Recorded captures through the decoder and the frozen copy
+LH2_REPLAY_SRCS = tests/test_lh2_replay.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c tests/lh2_reference.c drv/lh2_geometry/lh2_geometry.c
+LH2_REPLAY_HDRS = drv/lh2_decoder.h tests/lh2_reference.h tests/lh2_fixtures.h $(wildcard tests/lh2_fixtures/*.h)
+
+$(TEST_BUILD_DIR)/test_lh2_replay: $(LH2_REPLAY_SRCS) $(LH2_REPLAY_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_REPLAY_SRCS) -lm
 
 # libFuzzer on the decoder and the station choice; needs a clang with libFuzzer (not Apple's)
 FUZZ_CC ?= clang
