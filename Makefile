@@ -97,7 +97,7 @@ ARTIFACT_HEX = $(ARTIFACT_ELF:.elf=.hex)
 ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 
-.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test test-long test-sanitize wasm
+.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test test-long test-sanitize fuzz wasm
 
 all: $(PROJECTS)
 
@@ -205,6 +205,20 @@ LH2_SCENE_HDRS = tests/lh2_scene.h tests/lh2_synth.h tests/plant.h drv/lh2_selec
 $(TEST_BUILD_DIR)/test_lh2_scene: $(LH2_SCENE_SRCS) $(LH2_SCENE_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_SCENE_SRCS) -lm
+
+# libFuzzer on the decoder and the station choice; needs a clang with libFuzzer (not Apple's)
+FUZZ_CC ?= clang
+FUZZ_SECONDS ?= 60
+FUZZ_DIR ?= build/fuzz
+FUZZ_SRCS = tests/fuzz_lh2_decoder.c drv/lh2_select/lh2_select.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c drv/lh2_geometry/lh2_geometry.c
+
+fuzz: $(FUZZ_DIR)/fuzz_lh2_decoder
+	@mkdir -p $(FUZZ_DIR)/corpus
+	$(FUZZ_DIR)/fuzz_lh2_decoder -max_total_time=$(FUZZ_SECONDS) -max_len=6900 -print_final_stats=1 $(FUZZ_DIR)/corpus
+
+$(FUZZ_DIR)/fuzz_lh2_decoder: $(FUZZ_SRCS) drv/lh2_select.h drv/lh2_decoder.h drv/lh2_geometry.h
+	@mkdir -p $(FUZZ_DIR)
+	$(FUZZ_CC) -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -Idrv -o $@ $(FUZZ_SRCS) -lm
 
 CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c drv/lh2_fusion/lh2_fusion.c
 CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h drv/lh2_fusion.h drv/lh2_geometry.h
