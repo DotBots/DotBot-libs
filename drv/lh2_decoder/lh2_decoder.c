@@ -726,3 +726,28 @@ bool db_lh2_queue_pop(db_lh2_queue_t *queue, db_lh2_capture_t *out) {
     queue->count--;
     return true;
 }
+
+//=========================== recording ========================================
+
+static uint8_t *_le(uint8_t *p, uint32_t v, uint8_t bytes) {
+    for (uint8_t i = 0; i < bytes; i++) {
+        *p++ = (uint8_t)(v >> (8U * i));
+    }
+    return p;
+}
+
+void db_lh2_capture_record(const db_lh2_capture_t *cap, uint32_t sequence, uint32_t queue_dropped, uint32_t record_dropped, uint8_t out[DB_LH2_RECORD_BYTES]) {
+    uint8_t *p = out;
+    p          = _le(p, DB_LH2_RECORD_MAGIC, 2);
+    p          = _le(p, sequence, 4);
+    p          = _le(p, cap->t_us, 4);
+    p          = _le(p, (queue_dropped > 0xFFFFU) ? 0xFFFFU : queue_dropped, 2);
+    p          = _le(p, (record_dropped > 0xFFFFU) ? 0xFFFFU : record_dropped, 2);
+    memcpy(p, cap->spi, DB_LH2_CAPTURE_BYTES);
+    p += DB_LH2_CAPTURE_BYTES;
+    uint16_t sum = 0;
+    for (uint8_t *q = out; q < p; q++) {
+        sum = (uint16_t)(sum + *q);
+    }
+    _le(p, sum, 2);
+}

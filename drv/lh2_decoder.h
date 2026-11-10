@@ -181,4 +181,23 @@ void db_lh2_queue_push(db_lh2_queue_t *queue, const uint8_t spi[DB_LH2_CAPTURE_B
 /// Remove the oldest capture; false when empty
 bool db_lh2_queue_pop(db_lh2_queue_t *queue, db_lh2_capture_t *out);
 
+/// Bytes of one capture record, as a capture recording streams it
+#define DB_LH2_RECORD_BYTES (80U)
+#define DB_LH2_RECORD_MAGIC (0x324CU)  ///< "L2" little-endian, the first two bytes of every record
+
+/**
+ * @brief   One capture as a recording stores it, little-endian
+ *
+ * magic (2 B), sequence (4), t_us (4), queue drops (2), recording drops (2),
+ * the 64 SPI bytes, then the 16-bit sum of the 78 bytes before it. A gap in
+ * the sequence is a record the recording had no room for.
+ *
+ * @param[in]   cap             the capture
+ * @param[in]   sequence        its number among the captures popped
+ * @param[in]   queue_dropped   captures the queue overwrote so far, saturating at 0xFFFF
+ * @param[in]   record_dropped  records the recording dropped so far, saturating at 0xFFFF
+ * @param[out]  out             the record
+ */
+void db_lh2_capture_record(const db_lh2_capture_t *cap, uint32_t sequence, uint32_t queue_dropped, uint32_t record_dropped, uint8_t out[DB_LH2_RECORD_BYTES]);
+
 #endif

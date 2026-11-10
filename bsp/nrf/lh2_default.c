@@ -65,6 +65,18 @@ static const gpio_t _lh2_spi_fake_mosi_gpio = { .port = 1, .pin = 4 };
 
 static lh2_vars_t _lh2_vars;  ///< local data of the LH2 driver
 
+#if defined(DB_LH2_CAPTURE_RTT)
+#include <RTT/SEGGER_RTT.h>
+
+/// Every capture popped is also written to this RTT up-buffer as a db_lh2_capture_record()
+#define LH2_RTT_UP_BUFFER (1U)
+#define LH2_RTT_BYTES     (8192U)
+
+static uint8_t  _rtt_buffer[LH2_RTT_BYTES];
+static uint32_t _rtt_sequence = 0;
+static uint32_t _rtt_dropped  = 0;  ///< records the up-buffer had no room for
+#endif
+
 //=========================== prototypes =======================================
 
 /**
@@ -131,6 +143,9 @@ bool db_lh2_capture_init(const gpio_t *gpio_d, const gpio_t *gpio_e) {
 
     memset(_lh2_vars.spi_rx_buffer, 0, DB_LH2_CAPTURE_BYTES);
     memset(&_lh2_vars.queue, 0, sizeof(_lh2_vars.queue));
+#if defined(DB_LH2_CAPTURE_RTT)
+    SEGGER_RTT_ConfigUpBuffer(LH2_RTT_UP_BUFFER, "lh2", _rtt_buffer, sizeof(_rtt_buffer), SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+#endif
 
     // initialize GPIOTEs
     _gpiote_setup(gpio_e);
@@ -154,6 +169,15 @@ bool db_lh2_capture_pop(db_lh2_capture_t *out) {
     NVIC_DisableIRQ(SPIM_IRQ);
     bool popped = db_lh2_queue_pop(&_lh2_vars.queue, out);
     NVIC_EnableIRQ(SPIM_IRQ);
+#if defined(DB_LH2_CAPTURE_RTT)
+    if (popped) {
+        uint8_t record[DB_LH2_RECORD_BYTES];
+        db_lh2_capture_record(out, _rtt_sequence++, _lh2_vars.queue.dropped, _rtt_dropped, record);
+        if (SEGGER_RTT_Write(LH2_RTT_UP_BUFFER, record, sizeof(record)) != sizeof(record)) {
+            _rtt_dropped++;
+        }
+    }
+#endif
     return popped;
 }
 

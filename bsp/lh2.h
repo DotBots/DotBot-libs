@@ -16,6 +16,11 @@
  *         db_lh2_decoder_feed(&decoder, &cap, db_lh2_capture_now_us());
  *     }
  *
+ * Built with DB_LH2_CAPTURE_RTT defined, every capture popped is also written
+ * to RTT up-buffer 1 as a db_lh2_capture_record(), without blocking, for
+ * tools/lh2_capture.py to turn into test fixtures. The build option costs
+ * an 8 KiB buffer and is meant for a recording build only.
+ *
  * @{
  * @file
  * @author Filip Maksimovic <filip.maksimovic@inria.fr>
