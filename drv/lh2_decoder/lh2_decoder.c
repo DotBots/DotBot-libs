@@ -319,7 +319,13 @@ uint64_t db_lh2_demodulate(const uint8_t spi[DB_LH2_CAPTURE_BYTES]) {
     return _demodulate_light(samples);
 }
 
-uint8_t db_lh2_polynomial(uint64_t chipsH1, int8_t *start_val) {
+uint8_t db_lh2_polynomial(uint64_t bits, int8_t *bit_offset) {
+    uint8_t compared;
+    return db_lh2_polynomial_match(bits, bit_offset, &compared);
+}
+
+uint8_t db_lh2_polynomial_match(uint64_t chipsH1, int8_t *start_val, uint8_t *compared) {
+    *compared = 0;
     // Handle the edgecase of a full zero input
     if (chipsH1 == 0x00) {
         return DB_LH2_POLYNOMIAL_NONE;
@@ -360,6 +366,7 @@ uint8_t db_lh2_polynomial(uint64_t chipsH1, int8_t *start_val) {
         // If you found a sufficiently good value, then return which polinomial generated it
         if (min_weight <= (uint64_t)threshold) {
             selected_poly = min_weight_idx;
+            *compared     = (uint8_t)bits_N_for_comp;
             break;
             // match failed, try again removing bits from the end
         } else if (*start_val > 8) {
@@ -604,7 +611,8 @@ static db_lh2_decode_result_t _decode(db_lh2_decoder_t *dec, const db_lh2_captur
     uint64_t temp_bits_sweep = db_lh2_demodulate(cap->spi);
 
     int8_t  temp_bit_offset          = 0;
-    uint8_t temp_selected_polynomial = db_lh2_polynomial(temp_bits_sweep, &temp_bit_offset);
+    uint8_t compared                 = 0;
+    uint8_t temp_selected_polynomial = db_lh2_polynomial_match(temp_bits_sweep, &temp_bit_offset, &compared);
     if (temp_selected_polynomial == DB_LH2_POLYNOMIAL_NONE) {
         return DB_LH2_DECODE_NO_POLYNOMIAL;
     }
@@ -625,8 +633,19 @@ static db_lh2_decode_result_t _decode(db_lh2_decoder_t *dec, const db_lh2_captur
         slot->ready = false;
         return DB_LH2_DECODE_NO_INDEX;
     }
+    // A weak match is kept only near what the station last gave this slot,
+    // either polynomial, so a false match on a few bits does not make a sweep
+    bool confirmed = compared >= DB_LH2_WEAK_MATCH_BITS;
+    for (uint8_t p = basestation * 2U; p <= basestation * 2U + 1U && !confirmed; p++) {
+        uint32_t last = dec->checkpoint_count[p][sweep];
+        uint32_t gap  = (temp_lfsr_loc > last) ? temp_lfsr_loc - last : last - temp_lfsr_loc;
+        confirmed     = dec->checkpoint_bits[p][sweep] != 0 && gap <= DB_LH2_CONFIRM_COUNTS;
+    }
     dec->checkpoint_bits[temp_selected_polynomial][sweep]  = temp_lfsr_bits;
     dec->checkpoint_count[temp_selected_polynomial][sweep] = temp_lfsr_loc;
+    if (!confirmed) {
+        return DB_LH2_DECODE_UNCONFIRMED;
+    }
 
     // The count of the first bit that hit the sensor
     temp_lfsr_loc -= temp_bit_offset;

@@ -41,6 +41,8 @@
 #define DB_LH2_INDEX_NONE        (0xFFFFFFFFU)  ///< the LFSR search found no index
 #define DB_LH2_STALE_US          (2000000U)     ///< a slot older than this is emptied when its station is next decoded
 #define DB_LH2_SLOT_TOLERANCE_US (1000U)        ///< a capture joins a filled slot within this of its period grid
+#define DB_LH2_WEAK_MATCH_BITS   (28U)          ///< a polynomial match that compared fewer bits than this is weak
+#define DB_LH2_CONFIRM_COUNTS    (300U)         ///< a weak match is kept within this of its station's last count in that slot
 
 /*
  * Build option LH2_MOCAP_FILTER: defined (c_preprocessor_definitions in the
@@ -65,6 +67,7 @@ typedef enum {
     DB_LH2_DECODE_NO_INDEX,         ///< the LFSR search failed; the slot it chose is cleared
     DB_LH2_DECODE_PAST_REVOLUTION,  ///< the count is past one revolution; the slot it chose is cleared
     DB_LH2_DECODE_EQUAL_COUNTS,     ///< the count equals the other sweep's; both slots cleared
+    DB_LH2_DECODE_UNCONFIRMED,      ///< a weak match not near its station's last count in that slot; slots unchanged
     DB_LH2_DECODE_RESULTS,          ///< number of results, for the counters
 } db_lh2_decode_result_t;
 
@@ -161,6 +164,19 @@ uint64_t db_lh2_demodulate(const uint8_t spi[DB_LH2_CAPTURE_BYTES]);
  * @return  0..31, or DB_LH2_POLYNOMIAL_NONE
  */
 uint8_t db_lh2_polynomial(uint64_t bits, int8_t *bit_offset);
+
+/**
+ * @brief   db_lh2_polynomial(), and how many bits after the seed the match compared
+ *
+ * A match on fewer than DB_LH2_WEAK_MATCH_BITS is weak: 19 compared bits
+ * are what a capture whose light lasts about 7.5 us leaves, and what a few
+ * flipped samples can turn into another polynomial's sequence.
+ *
+ * @param[in]   bits        db_lh2_demodulate()'s word
+ * @param[out]  bit_offset  as db_lh2_polynomial()
+ * @param[out]  compared    bits compared after the seed: 39, 38, 29, 28 or 19
+ */
+uint8_t db_lh2_polynomial_match(uint64_t bits, int8_t *bit_offset, uint8_t *compared);
 
 /**
  * @brief   LFSR index of a 17-bit state, from the static and the decoder's dynamic checkpoints

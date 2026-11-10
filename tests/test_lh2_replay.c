@@ -52,10 +52,27 @@ static bool _same_state(void) {
     return memcmp(_dec.checkpoint_bits, cp->bits, sizeof(cp->bits)) == 0 && memcmp(_dec.checkpoint_count, cp->count, sizeof(cp->count)) == 0;
 }
 
+/// The decoder's slots and checkpoints set to the frozen copy's
+static void _resync(void) {
+    for (uint8_t sweep = 0; sweep < DB_LH2_SWEEPS; sweep++) {
+        for (uint8_t station = 0; station < DB_LH2_STATIONS; station++) {
+            db_lh2_slot_t *s = &_dec.slot[sweep][station];
+            s->count         = _ref.locations[sweep][station].lfsr_counts;
+            s->polynomial    = (uint8_t)_ref.locations[sweep][station].selected_polynomial;
+            s->t_us          = _ref.timestamps[sweep][station];
+            s->ready         = _ref.data_ready[sweep][station] == LH2_REF_PROCESSED_DATA_AVAILABLE;
+            s->filled        = s->t_us != 0 || s->ready;
+        }
+    }
+    const lh2_ref_checkpoint_t *cp = lh2_ref_checkpoints();
+    memcpy(_dec.checkpoint_bits, cp->bits, sizeof(cp->bits));
+    memcpy(_dec.checkpoint_count, cp->count, sizeof(cp->count));
+}
+
 static void test_fixture(const lh2_fixture_t *f) {
     lh2_ref_init(&_ref);
     db_lh2_decoder_init(&_dec);
-    uint32_t differ = 0, pairs = 0, pair_differ = 0;
+    uint32_t differ = 0, pairs = 0, pair_differ = 0, unconfirmed = 0;
     uint32_t next_read = f->count ? f->captures[0].t_us + 100000U : 0;
     for (size_t i = 0; i < f->count; i++) {
         db_lh2_capture_t cap;
@@ -72,7 +89,11 @@ static void test_fixture(const lh2_fixture_t *f) {
         }
 #endif
         db_lh2_decode_result_t got = db_lh2_decoder_feed(&_dec, &cap, cap.t_us);
-        if ((int)got != (int)want || !_same_state()) {
+        if (got == DB_LH2_DECODE_UNCONFIRMED) {
+            // declared: a weak match away from its station's last count is not kept
+            unconfirmed++;
+            _resync();
+        } else if ((int)got != (int)want || !_same_state()) {
             differ++;
         }
         if ((int32_t)(cap.t_us - next_read) >= 0) {
@@ -91,8 +112,8 @@ static void test_fixture(const lh2_fixture_t *f) {
         }
     }
     CHECK(differ == 0 && pair_differ == 0, "E7 %s: the decoder and the frozen copy agree on every capture: %u of %zu differ, %u of %u pairs", f->name, differ, f->count, pair_differ, pairs);
-    printf("  lh2_replay: %s (%s): %zu captures, stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u; %u pairs\n",
-           f->name, f->source, f->count, _dec.results[0], _dec.results[1], _dec.results[2], _dec.results[3], _dec.results[4], _dec.results[5], _dec.results[6], pairs);
+    printf("  lh2_replay: %s (%s): %zu captures, stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u, unconfirmed %u; %u pairs\n",
+           f->name, f->source, f->count, _dec.results[0], _dec.results[1], _dec.results[2], _dec.results[3], _dec.results[4], _dec.results[5], _dec.results[6], unconfirmed, pairs);
 }
 
 static void test_record_layout(void) {

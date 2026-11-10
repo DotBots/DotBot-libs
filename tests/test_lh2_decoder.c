@@ -163,9 +163,12 @@ static uint32_t _declared_s5 = 0;
 
 /// Inputs in each class of declared divergence, and those whose outcome was not the declared one
 #if !defined(LH2_MOCAP_FILTER)
-static uint32_t _declared_mocap = 0;
-static uint32_t _declared_wrong = 0;
+static uint32_t _declared_mocap      = 0;
+static uint32_t _declared_mocap_kept = 0;  ///< of them, still rejected as motion capture
 #endif
+static uint32_t _declared_wrong       = 0;
+static uint32_t _declared_weak        = 0;
+static uint32_t _declared_weak_stored = 0;  ///< of them, stored by the frozen copy
 
 /// One capture into both; false, and the case printed, on any difference.
 /// Declared divergences: without LH2_MOCAP_FILTER, a capture the frozen copy
@@ -174,6 +177,8 @@ static uint32_t _declared_wrong = 0;
 /// capture stamped 0, which the copy takes for empty, or the capture itself is
 /// stamped 0, it is fed to both and the decoder then set to the copy's state
 /// (row S5).
+/// A weak match the decoder does not confirm is the third class: the decoder
+/// keeps its slots, and is then set to the copy's state.
 static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uint8_t spi[DB_LH2_CAPTURE_BYTES], uint32_t t_us, uint32_t now_us) {
     db_lh2_capture_t cap;
     memcpy(cap.spi, spi, DB_LH2_CAPTURE_BYTES);
@@ -183,7 +188,7 @@ static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uin
     if (want == DB_LH2_DECODE_MOCAP) {
         db_lh2_decoder_t before = _dec;
         _declared_mocap++;
-        _declared_wrong += db_lh2_decoder_feed(&_dec, &cap, now_us) == DB_LH2_DECODE_MOCAP;
+        _declared_mocap_kept += db_lh2_decoder_feed(&_dec, &cap, now_us) == DB_LH2_DECODE_MOCAP;
         _dec = before;
         _compared++;
         _ref_results[want]++;
@@ -200,8 +205,21 @@ static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uin
     }
     uint32_t               counted = _dec.results[want < DB_LH2_DECODE_RESULTS ? want : 0];
     db_lh2_decode_result_t got     = db_lh2_decoder_feed(&_dec, &cap, now_us);
-    char                   buf[200];
-    const char            *differ = (got != want) ? "the result" : _state_differs(buf, sizeof(buf));
+    if (got == DB_LH2_DECODE_UNCONFIRMED) {
+        // declared: a weak match away from its station's last count is not kept
+        int8_t  offset;
+        uint8_t compared;
+        db_lh2_polynomial_match(db_lh2_demodulate(spi), &offset, &compared);
+        _declared_weak++;
+        _declared_wrong += compared >= DB_LH2_WEAK_MATCH_BITS;
+        _declared_weak_stored += want == DB_LH2_DECODE_STORED;
+        _resync();
+        _compared++;
+        _ref_results[want]++;
+        return true;
+    }
+    char        buf[200];
+    const char *differ = (got != want) ? "the result" : _state_differs(buf, sizeof(buf));
     if (differ == NULL && _dec.results[want] != counted + 1U) {
         differ = "the result counter";
     }
@@ -590,11 +608,20 @@ static void test_d6_d7_mocap_off(void) {
             lh2_synth_light_t light = _random_light(&rng);
             light.dwell_us          = dwells[d];
             light.idle_level        = (uint8_t)(lh2_synth_rand(&rng) >> 31);
-            db_lh2_capture_t cap    = { .t_us = 1000 };
+            // The same sweep one revolution earlier, a few counts back: a weak
+            // match is kept once its station has given that slot a count nearby
+            lh2_synth_light_t before = light;
+            before.count             = light.count > 3 ? light.count - 3 : 0;
+            before.polynomial        = (uint8_t)((light.polynomial & ~1U) | (lh2_synth_rand(&rng) >> 31));
+            db_lh2_capture_t prime   = { .t_us = 1000 };
+            lh2_synth_capture(&before, &rng, prime.spi);
+            uint32_t         t   = 1000 + db_lh2_period_us(light.polynomial >> 1);
+            db_lh2_capture_t cap = { .t_us = t };
             lh2_synth_capture(&light, &rng, cap.spi);
             db_lh2_decoder_t dec;
             db_lh2_decoder_init(&dec);
-            db_lh2_decode_result_t r = db_lh2_decoder_feed(&dec, &cap, 1000);
+            mocap += db_lh2_decoder_feed(&dec, &prime, 1000) == DB_LH2_DECODE_MOCAP;
+            db_lh2_decode_result_t r = db_lh2_decoder_feed(&dec, &cap, t);
             mocap += r == DB_LH2_DECODE_MOCAP;
             uint8_t station = light.polynomial >> 1;
             bool    stored  = r == DB_LH2_DECODE_STORED;
@@ -607,11 +634,12 @@ static void test_d6_d7_mocap_off(void) {
             }
         }
     }
-    MEASURED("D6 mocap check off: decoded right of %u at dwell 2, 4, 6, 7, 7.75, 8, 9, 12, 16 us: %u %u %u %u %u %u %u %u %u; %u wrong", n, ok[0], ok[1], ok[2], ok[3], ok[4], ok[5], ok[6], ok[7], ok[8], wrong);
+    MEASURED("D6 mocap check off, after a capture of the same sweep a revolution before: decoded right of %u at dwell 2, 4, 6, 7, 7.75, 8, 9, 12, 16 us: %u %u %u %u %u %u %u %u %u; %u wrong", n, ok[0], ok[1], ok[2], ok[3], ok[4], ok[5], ok[6], ok[7], ok[8], wrong);
     CHECK(mocap == 0, "D6 (changed): nothing is rejected as motion capture, %u were", mocap);
     // The shortest window needs 8 + 17 + 19 bits, about 7.3 us of light: dwells
-    // the filter rejected up to 7.75 us now decode from about 7 us on
-    CHECK(ok[1] == 0 && ok[3] > n / 20 && ok[4] > n * 80 / 100 && ok[5] > n * 90 / 100 && ok[8] > n * 99 / 100, "D6 (changed): decoded from the shortest dwell that carries enough bits: %u at 4 us, %u at 7 us, %u at 7.75 us, %u at 8 us, %u at 16 us", ok[1], ok[3], ok[4], ok[5], ok[8]);
+    // the filter rejected up to 7.75 us now decode from about 7 us on.
+    // A weak match also needs the capture before it decoded: at 7.75 us both did about 87 % of the time
+    CHECK(ok[1] == 0 && ok[3] > 0 && ok[4] > n * 65 / 100 && ok[5] > n * 85 / 100 && ok[8] > n * 99 / 100, "D6 (changed): decoded from the shortest dwell that carries enough bits: %u at 4 us, %u at 7 us, %u at 7.75 us, %u at 8 us, %u at 16 us", ok[1], ok[3], ok[4], ok[5], ok[8]);
 
     // D7: a strobe is still never taken for a station's sweep
     uint32_t strobe_stored = 0;
@@ -628,6 +656,99 @@ static void test_d6_d7_mocap_off(void) {
     CHECK(strobe_stored == 0, "D7: a strobe of any period from 0.5 to 4 MHz is never stored as a sweep, %u were", strobe_stored);
 }
 #endif
+
+/// Four stations, both sweeps decoded once on clean captures, as at rest under them
+static void _prime(db_lh2_decoder_t *dec, lh2_synth_rng_t *rng, uint8_t stations[4], uint32_t counts[4][2]) {
+    db_lh2_decoder_init(dec);
+    for (uint8_t i = 0; i < 4; i++) {
+        bool fresh;
+        do {
+            stations[i] = (uint8_t)(lh2_synth_rand(rng) >> 28);
+            fresh       = true;
+            for (uint8_t j = 0; j < i; j++) {
+                fresh = fresh && stations[j] != stations[i];
+            }
+        } while (!fresh);
+        for (uint8_t sweep = 0; sweep < 2; sweep++) {
+            counts[i][sweep]        = 20000U + sweep * 40000U + (uint32_t)(lh2_synth_uniform(rng) * 30000);
+            lh2_synth_light_t light = _light(rng, (uint8_t)(stations[i] * 2U + (lh2_synth_rand(rng) >> 31)), counts[i][sweep]);
+            db_lh2_capture_t  cap   = { .t_us = 1000U + i * 3000U + sweep * 7000U };
+            lh2_synth_capture(&light, rng, cap.spi);
+            db_lh2_decoder_feed(dec, &cap, cap.t_us);
+        }
+    }
+}
+
+/// Rows D3 and D4 with stations already heard: a weak match is no longer
+/// enough to make another station, flipped or aimed
+static void test_d3_d4_wrong_station(void) {
+    lh2_synth_rng_t  rng = { 2303 };
+    db_lh2_decoder_t primed, dec;
+    uint8_t          stations[4];
+    uint32_t         counts[4][2];
+    uint32_t         trials = _long ? 240000 : 48000, wrong = 0, ref_wrong = 0, right = 0, ref_right = 0;
+    for (uint32_t i = 0; i < trials; i++) {
+        if (i % 1000 == 0) {
+            _prime(&primed, &rng, stations, counts);
+        }
+        uint8_t           k     = (uint8_t)(i % 4);
+        uint8_t           sweep = (uint8_t)((i / 4) % 2);
+        lh2_synth_light_t light = _light(&rng, (uint8_t)(stations[k] * 2U + (lh2_synth_rand(&rng) >> 31)), counts[k][sweep] + (lh2_synth_rand(&rng) % 40));
+        db_lh2_capture_t  cap   = { .t_us = 100000U + i };
+        lh2_synth_capture(&light, &rng, cap.spi);
+        lh2_synth_flip_samples(cap.spi, 1 + (uint32_t)(i / 4000) % 12, &rng);
+        dec                      = primed;
+        db_lh2_decode_result_t r = db_lh2_decoder_feed(&dec, &cap, cap.t_us);
+        int8_t                 offset;
+        uint8_t                p = db_lh2_polynomial(db_lh2_demodulate(cap.spi), &offset);
+        if (r == DB_LH2_DECODE_STORED) {
+            wrong += (p >> 1) != stations[k];
+            right += (p >> 1) == stations[k];
+        }
+        // what the frozen copy's rule kept: any stored match, weak or not
+        if (p != DB_LH2_POLYNOMIAL_NONE && r != DB_LH2_DECODE_NO_POLYNOMIAL) {
+            ref_wrong += (p >> 1) != stations[k] && r != DB_LH2_DECODE_STORED && r == DB_LH2_DECODE_UNCONFIRMED;
+            ref_right += (p >> 1) == stations[k];
+        }
+    }
+    MEASURED("D3 flips 1-12 under four stations already heard: %u of %u flipped captures stored, %u to a wrong station (%u wrong ones refused as weak); %u matched their own station", right + wrong, trials, wrong, ref_wrong, ref_right);
+    CHECK(wrong == 0, "D3 (changed): flips no longer make another station, %u did", wrong);
+
+    // D4: flips aimed at a station that is also in view
+    uint32_t aimed = 0, made_other = 0, weak_made = 0, weak_aimed = 0, min_flips = 99;
+    for (uint32_t i = 0; i < 300; i++) {
+        _prime(&primed, &rng, stations, counts);
+        uint8_t           k = (uint8_t)(i % 4), target_k = (uint8_t)((k + 1 + i % 3) % 4);
+        lh2_synth_light_t light = _light(&rng, (uint8_t)(stations[k] * 2U), counts[k][0]);
+        uint8_t           where[39];
+        uint8_t           target = (uint8_t)(stations[target_k] * 2U + (lh2_synth_rand(&rng) >> 31));
+        uint8_t           n      = lh2_synth_confuse(&light, (uint8_t)(lh2_synth_rand(&rng) >> 31), target, where);
+        for (uint8_t f = 1; f <= n; f++) {
+            lh2_synth_light_t a = light;
+            for (uint8_t j = 0; j < f; j++) {
+                a.flip[where[j] / 32] |= 1U << (where[j] % 32);
+            }
+            db_lh2_capture_t cap = { .t_us = 200000U };
+            lh2_synth_capture(&a, &rng, cap.spi);
+            dec = primed;
+            int8_t  offset;
+            uint8_t compared;
+            uint8_t p = db_lh2_polynomial_match(db_lh2_demodulate(cap.spi), &offset, &compared);
+            aimed += p == target;
+            weak_aimed += p == target && compared < DB_LH2_WEAK_MATCH_BITS;
+            if (db_lh2_decoder_feed(&dec, &cap, cap.t_us) == DB_LH2_DECODE_STORED && p == target) {
+                made_other++;
+                weak_made += compared < DB_LH2_WEAK_MATCH_BITS;
+                min_flips = (f < min_flips) ? f : min_flips;
+            }
+        }
+    }
+    MEASURED("D4 aimed flips at a station also in view: %u captures matched the aimed-at polynomial, %u of them on a weak match; %u stored, %u on a weak match, the fewest flips %u", aimed, weak_aimed, made_other, weak_made, min_flips);
+    // The baseline's 3 aimed flips made another station on the shortest window. A weak match
+    // now has to land within DB_LH2_CONFIRM_COUNTS of that station's last count, which an
+    // aimed one does by chance; a strong one takes 6 flips or more, a forged sweep, not noise
+    CHECK(weak_aimed > 500 && weak_made * 100 <= weak_aimed && min_flips >= 5, "D4 (changed): a few aimed flips rarely make another station: %u of %u weak matches stored, the fewest flips %u", weak_made, weak_aimed, min_flips);
+}
 
 /// Row S5, changed: a capture stamped exactly 0 holds its slot like any other
 static void test_s5_stamp_zero(void) {
@@ -736,15 +857,18 @@ int main(int argc, char **argv) {
 #if !defined(LH2_MOCAP_FILTER)
     test_d6_d7_mocap_off();
 #endif
+    test_d3_d4_wrong_station();
     test_s5_stamp_zero();
     test_counters();
     test_queue();
 #if defined(LH2_MOCAP_FILTER)
     MEASURED("built with LH2_MOCAP_FILTER: the frozen copy's behaviour, every capture compared");
 #else
-    MEASURED("declared divergence, the motion-capture check off: %u captures the frozen copy rejects as mocap, %u of them rejected here too", _declared_mocap, _declared_wrong);
-    CHECK(_declared_wrong == 0, "declared divergence: a capture the frozen copy takes for motion capture is decoded like any other, %u were not", _declared_wrong);
+    MEASURED("declared divergence, the motion-capture check off: %u captures the frozen copy rejects as mocap, %u of them rejected here too", _declared_mocap, _declared_mocap_kept);
+    CHECK(_declared_mocap_kept == 0, "declared divergence: a capture the frozen copy takes for motion capture is decoded like any other, %u were not", _declared_mocap_kept);
 #endif
+    MEASURED("declared divergence, weak matches: %u not confirmed, %u of which the frozen copy stored", _declared_weak, _declared_weak_stored);
+    CHECK(_declared_wrong == 0, "declared divergence: every capture outside the declared classes compared, and every declared outcome held; %u did not", _declared_wrong);
     MEASURED("declared divergence, explicit slot occupancy: %u captures stamped 0, or fed while a slot held one", _declared_s5);
     MEASURED("golden comparison: %u captures, %u differ; reference results stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u",
              _compared, _differ, _ref_results[0], _ref_results[1], _ref_results[2], _ref_results[3], _ref_results[4], _ref_results[5], _ref_results[6]);
