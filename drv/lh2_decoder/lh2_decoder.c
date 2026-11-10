@@ -522,13 +522,15 @@ static uint8_t _select_sweep(db_lh2_decoder_t *dec, uint8_t polynomial, uint32_t
     uint16_t sweep_period = (uint16_t)db_lh2_period_us(basestation);
 
     for (size_t sweep = 0; sweep < 2; sweep++) {
-        if (now - dec->slot[sweep][basestation].t_us > DB_LH2_STALE_US) {
-            dec->slot[sweep][basestation].t_us  = 0;
-            dec->slot[sweep][basestation].ready = false;
+        db_lh2_slot_t *slot = &dec->slot[sweep][basestation];
+        if (slot->filled && now - slot->t_us > DB_LH2_STALE_US) {
+            slot->t_us   = 0;
+            slot->ready  = false;
+            slot->filled = false;
         }
     }
 
-    uint8_t sweep_slot_state = ((dec->slot[1][basestation].t_us != 0) << 1) | (dec->slot[0][basestation].t_us != 0);
+    uint8_t sweep_slot_state = (dec->slot[1][basestation].filled << 1) | dec->slot[0][basestation].filled;
     uint8_t selected_sweep   = 0;
 
     switch (sweep_slot_state) {
@@ -645,6 +647,7 @@ static db_lh2_decode_result_t _decode(db_lh2_decoder_t *dec, const db_lh2_captur
     slot->count      = temp_lfsr_loc;
     slot->polynomial = temp_selected_polynomial;
     slot->ready      = true;
+    slot->filled     = true;
     return DB_LH2_DECODE_STORED;
 }
 
@@ -663,8 +666,9 @@ void db_lh2_decoder_init(db_lh2_decoder_t *dec) {
 void db_lh2_decoder_reset(db_lh2_decoder_t *dec) {
     for (uint8_t station = 0; station < DB_LH2_STATIONS; station++) {
         for (uint8_t sweep = 0; sweep < DB_LH2_SWEEPS; sweep++) {
-            dec->slot[sweep][station].ready = false;
-            dec->slot[sweep][station].t_us  = 0;
+            dec->slot[sweep][station].ready  = false;
+            dec->slot[sweep][station].t_us   = 0;
+            dec->slot[sweep][station].filled = false;
         }
     }
 }

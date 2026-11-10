@@ -103,7 +103,7 @@ static const char *_state_differs(char *where, size_t len) {
                 snprintf(where, len, "reference slot %u/%u in a state the decoder has no word for", sweep, station);
                 return where;
             }
-            if (s->count != _ref.locations[sweep][station].lfsr_counts || (uint32_t)s->polynomial != _ref.locations[sweep][station].selected_polynomial || s->t_us != _ref.timestamps[sweep][station] || s->ready != ready_ref) {
+            if (s->count != _ref.locations[sweep][station].lfsr_counts || (uint32_t)s->polynomial != _ref.locations[sweep][station].selected_polynomial || s->t_us != _ref.timestamps[sweep][station] || s->ready != ready_ref || (_ref.timestamps[sweep][station] != 0 && !s->filled)) {
                 snprintf(where, len, "slot %u/%u: decoder count %u poly %u t %u ready %d, reference %u %u %u %d", sweep, station, s->count, s->polynomial, s->t_us, s->ready, _ref.locations[sweep][station].lfsr_counts, _ref.locations[sweep][station].selected_polynomial, _ref.timestamps[sweep][station], ready_ref);
                 return where;
             }
@@ -126,6 +126,41 @@ static void _both_init(void) {
     db_lh2_decoder_init(&_dec);
 }
 
+/// The capture's station holds a capture stamped exactly 0, which the frozen copy reads as empty (row S5)
+static bool _s5_pending(const uint8_t spi[DB_LH2_CAPTURE_BYTES]) {
+    int8_t  offset;
+    uint8_t polynomial = db_lh2_polynomial(db_lh2_demodulate(spi), &offset);
+    if (polynomial == DB_LH2_POLYNOMIAL_NONE) {
+        return false;
+    }
+    for (uint8_t sweep = 0; sweep < DB_LH2_SWEEPS; sweep++) {
+        const db_lh2_slot_t *slot = &_dec.slot[sweep][polynomial >> 1];
+        if (slot->filled && slot->t_us == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The decoder's slots and checkpoints set to the frozen copy's, its counters kept
+static void _resync(void) {
+    for (uint8_t sweep = 0; sweep < DB_LH2_SWEEPS; sweep++) {
+        for (uint8_t station = 0; station < DB_LH2_STATIONS; station++) {
+            db_lh2_slot_t *s = &_dec.slot[sweep][station];
+            s->count         = _ref.locations[sweep][station].lfsr_counts;
+            s->polynomial    = (uint8_t)_ref.locations[sweep][station].selected_polynomial;
+            s->t_us          = _ref.timestamps[sweep][station];
+            s->ready         = _ref.data_ready[sweep][station] == LH2_REF_PROCESSED_DATA_AVAILABLE;
+            s->filled        = s->t_us != 0 || s->ready;
+        }
+    }
+    const lh2_ref_checkpoint_t *cp = lh2_ref_checkpoints();
+    memcpy(_dec.checkpoint_bits, cp->bits, sizeof(cp->bits));
+    memcpy(_dec.checkpoint_count, cp->count, sizeof(cp->count));
+}
+
+static uint32_t _declared_s5 = 0;
+
 /// Inputs in each class of declared divergence, and those whose outcome was not the declared one
 #if !defined(LH2_MOCAP_FILTER)
 static uint32_t _declared_mocap = 0;
@@ -133,9 +168,12 @@ static uint32_t _declared_wrong = 0;
 #endif
 
 /// One capture into both; false, and the case printed, on any difference.
-/// Declared divergence, without LH2_MOCAP_FILTER: a capture the frozen copy
+/// Declared divergences: without LH2_MOCAP_FILTER, a capture the frozen copy
 /// rejects as motion capture is decoded like any other (the decoder's state
-/// is then put back, as the copy's never changed).
+/// is then put back, as the copy's never changed); and while a slot holds a
+/// capture stamped 0, which the copy takes for empty, or the capture itself is
+/// stamped 0, it is fed to both and the decoder then set to the copy's state
+/// (row S5).
 static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uint8_t spi[DB_LH2_CAPTURE_BYTES], uint32_t t_us, uint32_t now_us) {
     db_lh2_capture_t cap;
     memcpy(cap.spi, spi, DB_LH2_CAPTURE_BYTES);
@@ -152,6 +190,14 @@ static bool _feed_both(const char *set, uint32_t index, uint32_t seed, const uin
         return true;
     }
 #endif
+    if (t_us == 0 || _s5_pending(spi)) {
+        _declared_s5++;
+        db_lh2_decoder_feed(&_dec, &cap, now_us);
+        _resync();
+        _compared++;
+        _ref_results[want]++;
+        return true;
+    }
     uint32_t               counted = _dec.results[want < DB_LH2_DECODE_RESULTS ? want : 0];
     db_lh2_decode_result_t got     = db_lh2_decoder_feed(&_dec, &cap, now_us);
     char                   buf[200];
@@ -583,6 +629,20 @@ static void test_d6_d7_mocap_off(void) {
 }
 #endif
 
+/// Row S5, changed: a capture stamped exactly 0 holds its slot like any other
+static void test_s5_stamp_zero(void) {
+    lh2_synth_rng_t   rng = { 2505 };
+    db_lh2_decoder_t  dec;
+    db_lh2_capture_t  a = { .t_us = 0 }, b = { .t_us = 6000 };
+    lh2_synth_light_t la = _light(&rng, 6, 30000), lb = _light(&rng, 6, 66000);
+    lh2_synth_capture(&la, &rng, a.spi);
+    lh2_synth_capture(&lb, &rng, b.spi);
+    db_lh2_decoder_init(&dec);
+    bool stored = db_lh2_decoder_feed(&dec, &a, 0) == DB_LH2_DECODE_STORED && db_lh2_decoder_feed(&dec, &b, 6000) == DB_LH2_DECODE_STORED;
+    CHECK(stored && dec.slot[0][3].filled && dec.slot[0][3].t_us == 0 && dec.slot[1][3].filled && dec.slot[1][3].t_us == 6000 && db_lh2_decoder_pair_ready(&dec, 3),
+          "S5 (changed): a sweep stamped 0 keeps slot 0, the station's other sweep takes slot 1 and the pair is ready");
+}
+
 static void test_counters(void) {
     db_lh2_decoder_t dec;
     db_lh2_decoder_init(&dec);
@@ -676,6 +736,7 @@ int main(int argc, char **argv) {
 #if !defined(LH2_MOCAP_FILTER)
     test_d6_d7_mocap_off();
 #endif
+    test_s5_stamp_zero();
     test_counters();
     test_queue();
 #if defined(LH2_MOCAP_FILTER)
@@ -684,6 +745,7 @@ int main(int argc, char **argv) {
     MEASURED("declared divergence, the motion-capture check off: %u captures the frozen copy rejects as mocap, %u of them rejected here too", _declared_mocap, _declared_wrong);
     CHECK(_declared_wrong == 0, "declared divergence: a capture the frozen copy takes for motion capture is decoded like any other, %u were not", _declared_wrong);
 #endif
+    MEASURED("declared divergence, explicit slot occupancy: %u captures stamped 0, or fed while a slot held one", _declared_s5);
     MEASURED("golden comparison: %u captures, %u differ; reference results stored %u, mocap %u, no polynomial %u, zero bits %u, no index %u, past revolution %u, equal counts %u",
              _compared, _differ, _ref_results[0], _ref_results[1], _ref_results[2], _ref_results[3], _ref_results[4], _ref_results[5], _ref_results[6]);
 #if defined(LH2_MOCAP_FILTER)

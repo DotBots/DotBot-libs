@@ -71,9 +71,10 @@ typedef enum {
 /// One sweep slot of one station
 typedef struct {
     uint32_t count;       ///< LFSR count of the last capture stored here
-    uint32_t t_us;        ///< its capture's stamp; 0 marks the slot empty for the slot choice
+    uint32_t t_us;        ///< its capture's stamp
     uint8_t  polynomial;  ///< its polynomial, of this slot's station; DB_LH2_POLYNOMIAL_NONE before the first
     bool     ready;       ///< a count stored and not yet taken
+    bool     filled;      ///< a capture stored since the slot was last emptied; the slot choice reads this
 } db_lh2_slot_t;
 
 /// Both sweeps of one station, as db_lh2_decoder_take_pair() hands them over
