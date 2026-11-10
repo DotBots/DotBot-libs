@@ -128,7 +128,7 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_select
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_select $(TEST_BUILD_DIR)/test_lh2_scene
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
@@ -139,6 +139,7 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_lh2_baseline
 	$(TEST_BUILD_DIR)/test_lh2_decoder
 	$(TEST_BUILD_DIR)/test_lh2_select
+	$(TEST_BUILD_DIR)/test_lh2_scene
 
 # The full-size sweeps of the LH2 baseline and the decoder and selection comparisons: a million random
 # captures, the LFSR search over all 32 polynomials, and two million fixes
@@ -196,6 +197,14 @@ LH2_SELECT_HDRS = drv/lh2_select.h drv/lh2_decoder.h tests/lh2_reference.h tests
 $(TEST_BUILD_DIR)/test_lh2_select: $(LH2_SELECT_SRCS) $(LH2_SELECT_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_SELECT_SRCS) -lm
+
+# The LH2 path end to end on generated scenes, through the control core
+LH2_SCENE_SRCS = tests/test_lh2_scene.c tests/lh2_scene.c tests/lh2_synth.c tests/plant.c drv/lh2_select/lh2_select.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c drv/lh2_geometry/lh2_geometry.c $(CONTROL_SRCS)
+LH2_SCENE_HDRS = tests/lh2_scene.h tests/lh2_synth.h tests/plant.h drv/lh2_select.h drv/lh2_decoder.h drv/lh2_geometry.h $(CONTROL_HDRS)
+
+$(TEST_BUILD_DIR)/test_lh2_scene: $(LH2_SCENE_SRCS) $(LH2_SCENE_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_SCENE_SRCS) -lm
 
 CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c drv/lh2_fusion/lh2_fusion.c
 CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h drv/lh2_fusion.h drv/lh2_geometry.h
