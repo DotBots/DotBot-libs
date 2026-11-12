@@ -3,6 +3,7 @@
 
 examples
 nrf5340
+lh2
 api
 ```
 

@@ -56,6 +56,14 @@ jobs:
       - name: Run host-side tests under ASan and UBSan
         run: make test-sanitize
 
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Fuzz the LH2 decoder and station choice for a minute
+        run: make fuzz FUZZ_CC=clang-18 FUZZ_SECONDS=60
+
   style:
     runs-on: ubuntu-latest
     steps:
@@ -126,7 +134,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # needs: [docker, doc, style, build-success]
-    needs: [doc, style, host-tests, host-tests-long, host-tests-sanitize, wasm, build-success]
+    needs: [doc, style, host-tests, host-tests-long, host-tests-sanitize, fuzz, wasm, build-success]
     permissions:
       contents: write
     if: >-

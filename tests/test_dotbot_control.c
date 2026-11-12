@@ -15,6 +15,7 @@
 
 #include "dotbot_control.h"
 #include "geometry.h"
+#include "plant.h"
 
 //=========================== harness ==========================================
 
@@ -33,144 +34,6 @@ static int _passed = 0;
         }                                               \
     } while (0)
 
-//=========================== plant ============================================
-
-#define PLANT_TAU_S     (0.05f)
-#define PLANT_DT_S      (0.01f)
-#define PLANT_U_RUN     (32.0f)
-#define PLANT_K_RUN     (0.097f)
-#define PLANT_U_BREAK   (40.0f)
-#define PLANT_FIX_AGE   (2U)
-#define PLANT_FIX_EVERY (10U)
-
-typedef struct {
-    float    x;            ///< truth, axle midpoint, mm
-    float    y;            ///< truth, axle midpoint, mm
-    float    heading_deg;  ///< truth, 0 facing +y, clockwise positive
-    float    v_left;       ///< mm/s
-    float    v_right;      ///< mm/s
-    float    frac_left;    ///< counts not yet emitted
-    float    frac_right;   ///< counts not yet emitted
-    int8_t   pwm_left;
-    int8_t   pwm_right;
-    bool     brake_left;
-    bool     brake_right;
-    float    noise_mm;
-    uint32_t rng;
-    uint32_t tick;
-    float    px[PLANT_FIX_AGE + 1];  ///< photodiode history, newest first
-    float    py[PLANT_FIX_AGE + 1];
-    uint32_t fix_sequence;
-    uint32_t fix_x;
-    uint32_t fix_y;
-    bool     airborne;  ///< held off the floor: the wheels turn, the robot and its fixes stay put
-    float    air_x;     ///< photodiode fix while airborne, mm
-    float    air_y;     ///< photodiode fix while airborne, mm
-} plant_t;
-
-static float _uniform(plant_t *p) {
-    p->rng = p->rng * 1664525u + 1013904223u;
-    return ((float)(p->rng >> 8) + 0.5f) / 16777216.0f;
-}
-
-static float _gauss(plant_t *p) {
-    float u1 = _uniform(p);
-    float u2 = _uniform(p);
-    return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float)M_PI * u2);
-}
-
-static void _forward(float heading_deg, float *fx, float *fy) {
-    float h = heading_deg * (float)M_PI / 180.0f;
-    *fx     = -sinf(h);
-    *fy     = cosf(h);
-}
-
-static void _plant_init(plant_t *p, float x, float y, float heading_deg, float noise_mm, uint32_t seed) {
-    memset(p, 0, sizeof(*p));
-    p->x           = x;
-    p->y           = y;
-    p->heading_deg = heading_deg;
-    p->noise_mm    = noise_mm;
-    p->rng         = seed ? seed : 1;
-    float fx;
-    float fy;
-    _forward(heading_deg, &fx, &fy);
-    for (unsigned i = 0; i <= PLANT_FIX_AGE; i++) {
-        p->px[i] = x + DB_LH2_LEVER_ARM_EFFECTIVE * fx;
-        p->py[i] = y + DB_LH2_LEVER_ARM_EFFECTIVE * fy;
-    }
-}
-
-static float _plant_target(float pwm, float v) {
-    float a = fabsf(pwm);
-    if (a <= PLANT_U_RUN || (fabsf(v) < 1.0f && a < PLANT_U_BREAK)) {
-        return 0.0f;
-    }
-    return copysignf((a - PLANT_U_RUN) / PLANT_K_RUN, pwm);
-}
-
-static void _plant_step(plant_t *p, db_control_input_t *in) {
-    float gain = 1.0f - expf(-PLANT_DT_S / PLANT_TAU_S);
-    float tl   = p->brake_left ? 0.0f : _plant_target(p->pwm_left, p->v_left);
-    float tr   = p->brake_right ? 0.0f : _plant_target(p->pwm_right, p->v_right);
-    float vl   = p->v_left + gain * (tl - p->v_left);
-    float vr   = p->v_right + gain * (tr - p->v_right);
-    float dl   = 0.5f * (p->v_left + vl) * PLANT_DT_S;
-    float dr   = 0.5f * (p->v_right + vr) * PLANT_DT_S;
-    p->v_left  = vl;
-    p->v_right = vr;
-
-    float d      = p->airborne ? 0.0f : 0.5f * (dl + dr);
-    float dtheta = p->airborne ? 0.0f : (dl - dr) / db_track_effective_mm(dl, dr) * 180.0f / (float)M_PI;
-    float fx;
-    float fy;
-    _forward(p->heading_deg + dtheta / 2.0f, &fx, &fy);
-    p->x += d * fx;
-    p->y += d * fy;
-    p->heading_deg += dtheta;
-    if (p->heading_deg >= 180.0f) {
-        p->heading_deg -= 360.0f;
-    }
-    if (p->heading_deg < -180.0f) {
-        p->heading_deg += 360.0f;
-    }
-
-    p->frac_left += dl / DB_MM_PER_COUNT;
-    p->frac_right += dr / DB_MM_PER_COUNT;
-    in->counts_left  = (int32_t)truncf(p->frac_left);
-    in->counts_right = (int32_t)truncf(p->frac_right);
-    p->frac_left -= (float)in->counts_left;
-    p->frac_right -= (float)in->counts_right;
-
-    memmove(&p->px[1], &p->px[0], PLANT_FIX_AGE * sizeof(float));
-    memmove(&p->py[1], &p->py[0], PLANT_FIX_AGE * sizeof(float));
-    _forward(p->heading_deg, &fx, &fy);
-    p->px[0] = p->x + DB_LH2_LEVER_ARM_EFFECTIVE * fx;
-    p->py[0] = p->y + DB_LH2_LEVER_ARM_EFFECTIVE * fy;
-
-    p->tick++;
-    if (p->tick % PLANT_FIX_EVERY == 0) {
-        float nx = p->noise_mm > 0 ? p->noise_mm * _gauss(p) : 0;
-        float ny = p->noise_mm > 0 ? p->noise_mm * _gauss(p) : 0;
-        p->fix_sequence++;
-        p->fix_x = (uint32_t)lroundf(fmaxf(0, (p->airborne ? p->air_x : p->px[PLANT_FIX_AGE]) + nx));
-        p->fix_y = (uint32_t)lroundf(fmaxf(0, (p->airborne ? p->air_y : p->py[PLANT_FIX_AGE]) + ny));
-    }
-    in->fix_sequence  = p->fix_sequence;
-    in->fix_x         = p->fix_x;
-    in->fix_y         = p->fix_y;
-    in->elapsed_ticks = 1;
-}
-
-static void _plant_apply(plant_t *p, const db_control_output_t *out) {
-    if (out->write) {
-        p->pwm_left    = out->pwm_left;
-        p->pwm_right   = out->pwm_right;
-        p->brake_left  = out->brake_left;
-        p->brake_right = out->brake_right;
-    }
-}
-
 //=========================== helpers ==========================================
 
 typedef struct {
@@ -185,7 +48,7 @@ typedef struct {
 
 static void _sim_init(sim_t *s, int seeded) {
     memset(s, 0, sizeof(*s));
-    _plant_init(&s->plant, 1000.0f, 1000.0f, 0.0f, 1.0f, 12345u);
+    plant_init(&s->plant, 1000.0f, 1000.0f, 0.0f, 1.0f, 12345u);
     db_control_init(&s->control, &db_control_default_conf);
     if (seeded) {
         db_control_seed(&s->control, 1000.0f, 1000.0f, 0.0f);
@@ -195,9 +58,9 @@ static void _sim_init(sim_t *s, int seeded) {
 static void _sim_run(sim_t *s, uint32_t ticks) {
     for (uint32_t i = 0; i < ticks; i++) {
         db_control_input_t in;
-        _plant_step(&s->plant, &in);
+        plant_step(&s->plant, &in);
         db_control_tick(&s->control, &in, &s->out);
-        _plant_apply(&s->plant, &s->out);
+        plant_apply(&s->plant, &s->out);
         uint8_t state = (uint8_t)s->control.steering.state;
         if (state != DB_STEERING_IDLE && (s->state_count == 0 || s->states[s->state_count - 1] != state) && s->state_count < sizeof(s->states)) {
             s->states[s->state_count++] = state;
@@ -320,7 +183,7 @@ static void test_seed(void) {
 
     sim_t s;
     _sim_init(&s, 0);
-    _plant_init(&s.plant, 1000.0f, 1000.0f, 90.0f, 1.0f, 12345u);
+    plant_init(&s.plant, 1000.0f, 1000.0f, 90.0f, 1.0f, 12345u);
     db_control_seed(&s.control, 1000.0f, 1000.0f, 90.0f);
     _send_batch(&s, 1);
     _sim_run(&s, 1500);
@@ -602,7 +465,7 @@ static void test_lifted_spins_once(void) {
 static void _run_with_lines(sim_t *s, uint32_t ticks, float offset_mm) {
     for (uint32_t i = 0; i < ticks; i++) {
         db_control_input_t in;
-        _plant_step(&s->plant, &in);
+        plant_step(&s->plant, &in);
         if (s->plant.tick % PLANT_FIX_EVERY == 0) {
             db_lh2_floor_line_t lines[2] = {
                 { .nx = 1, .ny = 0, .d_mm = (float)in.fix_x + offset_mm, .var_mm2 = 4, .station = 3, .sweep = 0 },
@@ -611,7 +474,7 @@ static void _run_with_lines(sim_t *s, uint32_t ticks, float offset_mm) {
             db_control_lines(&s->control, lines, 2);
         }
         db_control_tick(&s->control, &in, &s->out);
-        _plant_apply(&s->plant, &s->out);
+        plant_apply(&s->plant, &s->out);
     }
 }
 
@@ -635,7 +498,7 @@ static void test_lines_replace_the_fix(void) {
 /// One tick with lines through the fix, the fix and both lines moved by (dx, dy)
 static void _tick_with_lines_offset(sim_t *s, float dx, float dy) {
     db_control_input_t in;
-    _plant_step(&s->plant, &in);
+    plant_step(&s->plant, &in);
     if (s->plant.tick % PLANT_FIX_EVERY == 0) {
         in.fix_x                     = (uint32_t)lroundf((float)in.fix_x + dx);
         in.fix_y                     = (uint32_t)lroundf((float)in.fix_y + dy);
@@ -647,7 +510,7 @@ static void _tick_with_lines_offset(sim_t *s, float dx, float dy) {
         db_control_lines(&s->control, lines, 2);
     }
     db_control_tick(&s->control, &in, &s->out);
-    _plant_apply(&s->plant, &s->out);
+    plant_apply(&s->plant, &s->out);
 }
 
 static void test_lines_keep_the_kidnap_check(void) {
@@ -706,7 +569,7 @@ static float _rest_no_heading(int both, float bx, float by, float *off_x, float 
     uint32_t fixes = 0;
     for (uint32_t i = 0; i < 300; i++) {
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
+        plant_step(&s.plant, &in);
         float tx = s.plant.px[0], ty = s.plant.py[0];
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
             db_lh2_floor_line_t lines[4];
@@ -750,7 +613,7 @@ static void _near_parallel(sim_t *s, float off_mm) {
     _sim_init(s, 0);
     for (uint32_t i = 0; i < 20; i++) {
         db_control_input_t in;
-        _plant_step(&s->plant, &in);
+        plant_step(&s->plant, &in);
         if (s->plant.tick % PLANT_FIX_EVERY == 0) {
             float               x = (float)in.fix_x + off_mm, y = (float)in.fix_y;
             db_lh2_floor_line_t lines[2] = {
@@ -778,7 +641,7 @@ static void test_fix_leaves_out_a_rejected_station(void) {
     s.plant.noise_mm = 0;
     for (uint32_t i = 0; i < 300; i++) {
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
+        plant_step(&s.plant, &in);
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
             db_lh2_floor_line_t lines[4];
             _cross(s.plant.px[PLANT_FIX_AGE], s.plant.py[PLANT_FIX_AGE], 20.0f, 0, &lines[0]);
@@ -805,7 +668,7 @@ static void test_fusion_record_before_heading_and_on_fallback(void) {
     _sim_init(&s, 0);
     for (uint32_t i = 0; i < 20; i++) {
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
+        plant_step(&s.plant, &in);
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
             float               x = (float)in.fix_x, y = (float)in.fix_y;
             db_lh2_floor_line_t lines[2] = {
@@ -824,12 +687,12 @@ static void test_fusion_record_before_heading_and_on_fallback(void) {
     db_lh2_floor_line_t lines[2];
     _cross(200.0f, 300.0f, 20.0f, 1, lines);
     db_control_input_t in;
-    _plant_step(&s.plant, &in);
+    plant_step(&s.plant, &in);
     db_control_lines(&s.control, lines, 2);
     db_control_tick(&s.control, &in, &s.out);
     CHECK(r->fix_from_lines && fabsf(r->fix_x - 200.0f) < 0.01f && fabsf(r->fix_y - 300.0f) < 0.01f, "no heading record: the lines' point, (%.2f, %.2f)", r->fix_x, r->fix_y);
 
-    _plant_step(&s.plant, &in);
+    plant_step(&s.plant, &in);
     db_control_tick(&s.control, &in, &s.out);
     CHECK(r->count == 2 && r->fix_from_lines && fabsf(r->fix_x - 200.0f) < 0.01f, "a tick with no lines leaves the record as it was");
 }
@@ -856,7 +719,7 @@ static float _dark_at_rest_swing(int with_lines) {
             rest_deg = s.control.estimator.theta * 180.0f / (float)M_PI;
         }
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
+        plant_step(&s.plant, &in);
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
             float tx = s.plant.px[PLANT_FIX_AGE], ty = s.plant.py[PLANT_FIX_AGE];
             if (with_lines) {
@@ -870,7 +733,7 @@ static float _dark_at_rest_swing(int with_lines) {
             }
         }
         db_control_tick(&s.control, &in, &s.out);
-        _plant_apply(&s.plant, &s.out);
+        plant_apply(&s.plant, &s.out);
         if (stop > 0 && i == stop + 2400) {
             break;
         }
@@ -896,7 +759,7 @@ static uint32_t _station_back_fused(uint32_t gap_ticks, uint32_t window_ticks) {
     uint32_t back = 1000 + gap_ticks, accepted_at_back = 0;
     for (uint32_t i = 0; i < back + window_ticks; i++) {
         db_control_input_t in;
-        _plant_step(&s.plant, &in);
+        plant_step(&s.plant, &in);
         if (s.plant.tick % PLANT_FIX_EVERY == 0) {
             float               tx = s.plant.px[PLANT_FIX_AGE], ty = s.plant.py[PLANT_FIX_AGE];
             db_lh2_floor_line_t lines[4];
@@ -933,7 +796,7 @@ static float _bimodal_at_rest(sim_t *s, uint32_t fixes, uint32_t skip, uint32_t 
     float worst = 0;
     for (uint32_t n = 0; n < fixes;) {
         db_control_input_t in;
-        _plant_step(&s->plant, &in);
+        plant_step(&s->plant, &in);
         bool  fix = s->plant.tick % PLANT_FIX_EVERY == 0;
         float tx  = s->plant.px[PLANT_FIX_AGE] + dx;
         float ty  = s->plant.py[PLANT_FIX_AGE] + dy;
@@ -943,12 +806,12 @@ static float _bimodal_at_rest(sim_t *s, uint32_t fixes, uint32_t skip, uint32_t 
             _cross(tx, ty, 65.0f, 1, &lines[2]);
             for (unsigned i = 0; i < 4; i++) {
                 lines[i].var_mm2 = 4;
-                lines[i].d_mm += _gauss(&s->plant);
+                lines[i].d_mm += plant_gauss(&s->plant);
             }
-            if (_uniform(&s->plant) < 0.57f) {
+            if (plant_uniform(&s->plant) < 0.57f) {
                 lines[2].d_mm += 20.0f;
             }
-            bool  both = _uniform(&s->plant) * 100.0f < (float)both_pct && !(drop_every && n % drop_every < 6);
+            bool  both = plant_uniform(&s->plant) * 100.0f < (float)both_pct && !(drop_every && n % drop_every < 6);
             float sx = tx, sy = ty;
             db_lh2_fusion_intersect(&lines[2], 2, &sx, &sy);
             in.fix_x = (uint32_t)lroundf(sx);

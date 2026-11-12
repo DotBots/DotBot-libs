@@ -97,7 +97,7 @@ ARTIFACT_HEX = $(ARTIFACT_ELF:.elf=.hex)
 ARTIFACTS = $(ARTIFACT_ELF) $(ARTIFACT_HEX)
 
 
-.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test test-long test-sanitize wasm
+.PHONY: $(PROJECTS) $(ARTIFACT_PROJECTS) artifacts docker docker-release format check-format test test-long test-sanitize fuzz wasm
 
 all: $(PROJECTS)
 
@@ -128,7 +128,7 @@ HOST_CC ?= cc
 HOST_CFLAGS ?= -std=gnu11 -Wall -Wextra -Werror -O2 -DBOARD_DOTBOT_V3 -Idrv
 TEST_BUILD_DIR ?= build/tests
 
-test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline
+test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator $(TEST_BUILD_DIR)/test_steering $(TEST_BUILD_DIR)/test_dotbot_control $(TEST_BUILD_DIR)/test_dotbot_control_fleet $(TEST_BUILD_DIR)/test_lh2_geometry $(TEST_BUILD_DIR)/test_lh2_fusion $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_decoder_mocap $(TEST_BUILD_DIR)/test_lh2_select $(TEST_BUILD_DIR)/test_lh2_scene $(TEST_BUILD_DIR)/test_lh2_replay
 	$(TEST_BUILD_DIR)/test_wheel_control
 	$(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_steering
@@ -137,11 +137,20 @@ test: $(TEST_BUILD_DIR)/test_wheel_control $(TEST_BUILD_DIR)/test_pose_estimator
 	$(TEST_BUILD_DIR)/test_lh2_geometry
 	$(TEST_BUILD_DIR)/test_lh2_fusion
 	$(TEST_BUILD_DIR)/test_lh2_baseline
+	$(TEST_BUILD_DIR)/test_lh2_decoder
+	$(TEST_BUILD_DIR)/test_lh2_decoder_mocap
+	$(TEST_BUILD_DIR)/test_lh2_select
+	$(TEST_BUILD_DIR)/test_lh2_scene
+	$(TEST_BUILD_DIR)/test_lh2_replay
+	python3 dist/scripts/lh2/lh2_capture.py --self-test
 
-# The full-size sweeps of the LH2 baseline: a million random captures, and the
-# LFSR search over all 32 polynomials
-test-long: $(TEST_BUILD_DIR)/test_lh2_baseline
+# The full-size sweeps of the LH2 baseline and the decoder and selection comparisons: a million random
+# captures, the LFSR search over all 32 polynomials, and two million fixes
+test-long: $(TEST_BUILD_DIR)/test_lh2_baseline $(TEST_BUILD_DIR)/test_lh2_decoder $(TEST_BUILD_DIR)/test_lh2_decoder_mocap $(TEST_BUILD_DIR)/test_lh2_select
 	$(TEST_BUILD_DIR)/test_lh2_baseline --long
+	$(TEST_BUILD_DIR)/test_lh2_decoder --long
+	$(TEST_BUILD_DIR)/test_lh2_decoder_mocap --long
+	$(TEST_BUILD_DIR)/test_lh2_select --long
 
 # Every host suite again, under AddressSanitizer and UndefinedBehaviorSanitizer
 SANITIZE_FLAGS ?= -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
@@ -177,12 +186,63 @@ $(TEST_BUILD_DIR)/test_lh2_baseline: $(LH2_BASELINE_SRCS) $(LH2_BASELINE_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
 	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_BASELINE_SRCS) -lm
 
+# drv/lh2_decoder against that frozen copy, capture by capture
+LH2_DECODER_SRCS = tests/test_lh2_decoder.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c tests/lh2_reference.c tests/lh2_synth.c drv/lh2_geometry/lh2_geometry.c
+LH2_DECODER_HDRS = drv/lh2_decoder.h tests/lh2_reference.h tests/lh2_synth.h drv/lh2_geometry.h
+
+$(TEST_BUILD_DIR)/test_lh2_decoder: $(LH2_DECODER_SRCS) $(LH2_DECODER_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_DECODER_SRCS) -lm
+
+# The same comparison with the motion-capture check built in, as a build next to a Qualisys system has it
+$(TEST_BUILD_DIR)/test_lh2_decoder_mocap: $(LH2_DECODER_SRCS) $(LH2_DECODER_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -DLH2_MOCAP_FILTER -Itests -o $@ $(LH2_DECODER_SRCS) -lm
+
+# drv/lh2_select against the frozen swarmit a702520 choice, and PyDotBot's station-rule fixtures
+LH2_SELECT_SRCS = tests/test_lh2_select.c drv/lh2_select/lh2_select.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c tests/lh2_reference_select.c drv/lh2_geometry/lh2_geometry.c
+LH2_SELECT_HDRS = drv/lh2_select.h drv/lh2_decoder.h tests/lh2_reference.h tests/lh2_reference_select.h drv/lh2_geometry.h tests/lh2_station_rule.json
+
+$(TEST_BUILD_DIR)/test_lh2_select: $(LH2_SELECT_SRCS) $(LH2_SELECT_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_SELECT_SRCS) -lm
+
+# The LH2 path end to end on generated scenes, through the control core
+LH2_SCENE_SRCS = tests/test_lh2_scene.c tests/lh2_scene.c tests/lh2_synth.c tests/plant.c drv/lh2_select/lh2_select.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c drv/lh2_geometry/lh2_geometry.c $(CONTROL_SRCS)
+LH2_SCENE_HDRS = tests/lh2_scene.h tests/lh2_synth.h tests/plant.h drv/lh2_select.h drv/lh2_decoder.h drv/lh2_geometry.h $(CONTROL_HDRS)
+
+$(TEST_BUILD_DIR)/test_lh2_scene: $(LH2_SCENE_SRCS) $(LH2_SCENE_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_SCENE_SRCS) -lm
+
+# Recorded captures through the decoder and the frozen copy
+LH2_REPLAY_SRCS = tests/test_lh2_replay.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c tests/lh2_reference.c drv/lh2_geometry/lh2_geometry.c
+LH2_REPLAY_HDRS = drv/lh2_decoder.h tests/lh2_reference.h tests/lh2_fixtures.h $(wildcard tests/lh2_fixtures/*.h)
+
+$(TEST_BUILD_DIR)/test_lh2_replay: $(LH2_REPLAY_SRCS) $(LH2_REPLAY_HDRS)
+	@mkdir -p $(TEST_BUILD_DIR)
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ $(LH2_REPLAY_SRCS) -lm
+
+# libFuzzer on the decoder and the station choice; needs a clang with libFuzzer (not Apple's)
+FUZZ_CC ?= clang
+FUZZ_SECONDS ?= 60
+FUZZ_DIR ?= build/fuzz
+FUZZ_SRCS = tests/fuzz_lh2_decoder.c drv/lh2_select/lh2_select.c drv/lh2_decoder/lh2_decoder.c drv/lh2_decoder/lh2_checkpoints.c drv/lh2_geometry/lh2_geometry.c
+
+fuzz: $(FUZZ_DIR)/fuzz_lh2_decoder
+	@mkdir -p $(FUZZ_DIR)/corpus
+	$(FUZZ_DIR)/fuzz_lh2_decoder -max_total_time=$(FUZZ_SECONDS) -max_len=6900 -print_final_stats=1 $(FUZZ_DIR)/corpus
+
+$(FUZZ_DIR)/fuzz_lh2_decoder: $(FUZZ_SRCS) drv/lh2_select.h drv/lh2_decoder.h drv/lh2_geometry.h
+	@mkdir -p $(FUZZ_DIR)
+	$(FUZZ_CC) -std=gnu11 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -Idrv -o $@ $(FUZZ_SRCS) -lm
+
 CONTROL_SRCS = drv/dotbot_control/dotbot_control.c drv/steering/steering.c drv/wheel_control/wheel_control.c drv/pose_estimator/pose_estimator.c drv/lh2_fusion/lh2_fusion.c
 CONTROL_HDRS = drv/dotbot_control.h drv/steering.h drv/wheel_control.h drv/pose_estimator.h drv/protocol.h drv/geometry.h drv/lh2_fusion.h drv/lh2_geometry.h
 
-$(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c $(CONTROL_SRCS) $(CONTROL_HDRS)
+$(TEST_BUILD_DIR)/test_dotbot_control: tests/test_dotbot_control.c tests/plant.c tests/plant.h $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
-	$(HOST_CC) $(HOST_CFLAGS) -o $@ tests/test_dotbot_control.c $(CONTROL_SRCS) -lm
+	$(HOST_CC) $(HOST_CFLAGS) -Itests -o $@ tests/test_dotbot_control.c tests/plant.c $(CONTROL_SRCS) -lm
 
 $(TEST_BUILD_DIR)/test_dotbot_control_fleet: tests/test_dotbot_control_fleet.c wasm/dotbot_control_wasm.c wasm/dotbot_control_wasm.h $(CONTROL_SRCS) $(CONTROL_HDRS)
 	@mkdir -p $(TEST_BUILD_DIR)
